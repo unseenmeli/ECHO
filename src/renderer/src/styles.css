@@ -256,6 +256,8 @@ body,
 
 .watch-pill[data-status='paused'] .watch-dot::after {
   animation: none;
+}
+
 /* Voice conversation feedback: the pill stays visible while a conversation is
    active, "?" shows its state, and the character animates a little faster
    while ECHO is speaking. */

@@ -394,6 +394,9 @@ body,
 @media (prefers-reduced-motion: reduce) {
   .tutor-cursor {
     animation: none;
+  }
+}
+
 /* --- Voice dock: floats over the bottom centre of the board ------------------- */
 .voice-dock {
   position: absolute;
