@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, session as electronSession, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, session as electronSession, shell, systemPreferences } from 'electron'
 import { board, isBoardOpen } from '../board'
 import { CommonsPictures } from '../lesson/pictures'
 import { ClaudeChat } from './claude'
@@ -9,6 +9,8 @@ import { FluxClient } from './flux'
 import { screenVoiceContext } from './screenProvider'
 import type { EnginePort } from './ports'
 import { VoiceSession } from './session'
+import { showDraft } from '../compose/draftWindow'
+import { composeUrl, type Draft, type DraftEdits } from '../../shared/compose'
 import type { PreferenceStore } from '../memory/preferenceStore'
 import type { StudyMaterialPort } from '../study/studyMaterial'
 import {
@@ -139,6 +141,15 @@ class VoiceHost {
     return !!this.session?.deepDive()
   }
 
+  /** Send or Cancel pressed on the draft card. */
+  answerDraft(id: string, send: boolean): void {
+    this.session?.answerDraft(id, send)
+  }
+
+  editDraft(id: string, edits: DraftEdits): void {
+    this.session?.editDraft(id, edits)
+  }
+
   /** Ends any conversation (used on app quit). */
   shutdown(): void {
     this.session?.stop()
@@ -229,6 +240,15 @@ class VoiceHost {
       ...(this.preferences ? { preferences: this.preferences } : {}),
       ...(this.study ? { study: this.study } : {}),
       contextProvider: screenVoiceContext,
+      compose: {
+        destinations: cfg.composeDestinations,
+        show: showDraft,
+        // The text also goes on the clipboard, in case the page drops part of a long draft.
+        open: (draft: Draft) => {
+          clipboard.writeText(draft.body)
+          void shell.openExternal(composeUrl(draft))
+        }
+      },
       emit: (e) => this.broadcast(e),
       log: (m) => console.log(m)
     })
