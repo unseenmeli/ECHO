@@ -1,0 +1,81 @@
+:root {
+  --paper: #f3f1ea;
+  --ink: #151514;
+  --glass-bg: rgba(243, 241, 234, 0.82);
+  --glass-border: rgba(0, 0, 0, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable', 'Segoe UI', system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tutor-root {
+  position: relative;
+  height: 100%;
+}
+
+/* Title bar: draggable glass strip. The OS draws caption buttons / traffic
+   lights over its ends, so reserve their space. */
+.tutor-titlebar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 10;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  padding-right: calc(100vw - env(titlebar-area-width, 100vw) + 16px);
+  background: var(--glass-bg);
+  backdrop-filter: blur(18px) saturate(1.4);
+  border-bottom: 0.5px solid var(--glass-border);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.platform-mac .tutor-titlebar {
+  padding-left: 84px;
+}
+
+.tutor-seal {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tutor-titlebar h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* The whiteboard fills the window; Excalidraw tracks its container's size. */
+.tutor-board {
+  position: absolute;
+  inset: 52px 0 0 0;
+}
+
+.tutor-board .excalidraw {
+  height: 100%;
+  width: 100%;
+}

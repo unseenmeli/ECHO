@@ -36,6 +36,18 @@ export function Companion() {
       <div className="controls">
         <button
           className="glass-button"
+          aria-label="Start lesson"
+          title="Start lesson"
+          onClick={() => window.companion.openLesson()}
+        >
+          <svg className="glyph-book" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 6.5C10.4 5.3 8.2 4.7 5 4.7v12.6c3.2 0 5.4.6 7 1.8 1.6-1.2 3.8-1.8 7-1.8V4.7c-3.2 0-5.4.6-7 1.8z" />
+            <path d="M12 6.5v12.6" />
+          </svg>
+        </button>
+        <span className="controls-divider" aria-hidden="true" />
+        <button
+          className="glass-button"
           aria-label="Ask a question"
           title="Ask a question"
           onClick={() => window.companion.ask()}
