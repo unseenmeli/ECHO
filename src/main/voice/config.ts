@@ -191,7 +191,7 @@ export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigRes
       eotTimeoutMs: num(env.ECHO_EOT_TIMEOUT_MS, 4000, 500, 60000),
       sttUnsureConfidence: num(env.ECHO_STT_UNSURE_CONFIDENCE, 0.6, 0, 1),
       bargeInMs: env.ECHO_BARGE_IN_MS?.trim() === '0' ? 0 : num(env.ECHO_BARGE_IN_MS, 450, 150, 3000),
-      ttsVoice: env.ECHO_TTS_VOICE?.trim() || 'aura-2-thalia-en',
+      ttsVoice: env.ECHO_TTS_VOICE?.trim() || 'aura-2-jupiter-en',
       ttsFirstChars: num(env.ECHO_TTS_FIRST_CHARS, 40, 10, 200),
       ttsGroupChars: num(env.ECHO_TTS_GROUP_CHARS, 220, 60, 1200),
       deepgramBase: (env.ECHO_DEEPGRAM_WS_BASE?.trim() || 'wss://api.deepgram.com').replace(/\/+$/, ''),
