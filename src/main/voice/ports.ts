@@ -52,6 +52,8 @@ export interface TtsHooks {
 
 export interface ChatRequest {
   system: string
+  /** Overrides the configured reply budget (lesson replies carry segment markup). */
+  maxTokens?: number
   messages: ChatMessage[]
   signal: AbortSignal
   onText(delta: string): void

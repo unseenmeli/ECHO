@@ -54,8 +54,28 @@ export interface VoiceMetrics {
   interruptToStop?: number
 }
 
+/** Subtle status about the whiteboard side of a lesson (e.g. "Preparing the drawing…"). */
+export interface LessonStatus {
+  level: 'info' | 'warn'
+  /** null clears the status. */
+  message: string | null
+}
+
+/** Development timings for one teaching segment (ms; see src/main/lesson/controller.ts). */
+export interface LessonSegmentMetrics {
+  segmentId: string
+  mode: 'visual' | 'verbal-only' | 'no-visual-needed'
+  prepMs?: number
+  setupAppliedMs?: number
+  ttsSentMs?: number
+  audioStartMs?: number
+  cueDelaysMs?: number[]
+}
+
 export type VoiceEvent =
   | { type: 'state'; snapshot: VoiceSnapshot }
+  | { type: 'lesson-status'; status: LessonStatus }
+  | { type: 'lesson-metrics'; metrics: LessonSegmentMetrics }
   | { type: 'entry'; entry: TranscriptEntry }
   | { type: 'metrics'; metrics: VoiceMetrics }
   | { type: 'reset' }
@@ -105,6 +125,7 @@ export const TTS_SAMPLE_RATE = 24000
 export type EnginePlaybackReport =
   | { kind: 'started'; responseId: string; at: number }
   | { kind: 'segment'; responseId: string; segment: number; at: number }
+  | { kind: 'segmentStart'; responseId: string; segment: number; at: number }
   | { kind: 'ended'; responseId: string; at: number }
   | { kind: 'stopped'; responseId: string; at: number; partial?: { segment: number; fraction: number } }
 

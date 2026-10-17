@@ -24,6 +24,10 @@ export class Playback {
   private readonly sources = new Set<AudioBufferSourceNode>()
   private readonly dead = new Set<string>()
   private markers: Marker[] = []
+  /** Flush segments whose first audio is scheduled but has not started playing yet. */
+  private pendingStarts: Array<{ segment: number; at: number }> = []
+  private markersSeen = 0
+  private scheduledSegment = -1
   /** Audio-clock span of every flush segment of the current response, for measuring how much was heard. */
   private bounds: Array<{ segment: number; start: number; end: number }> = []
   private currentId: string | null = null
@@ -76,6 +80,11 @@ export class Playback {
     const startAt = this.nextTime > now ? this.nextTime : now + (this.firstStart === null ? START_LEAD_S : 0.005)
     if (this.firstStart === null) this.firstStart = startAt
     src.start(startAt)
+    // Audio that arrives after marker k belongs to flush segment k+1: remember when it will really start.
+    if (this.markersSeen !== this.scheduledSegment) {
+      this.scheduledSegment = this.markersSeen
+      this.pendingStarts.push({ segment: this.markersSeen, at: startAt })
+    }
     this.nextTime = startAt + buffer.duration
     this.sources.add(src)
     src.onended = () => this.sources.delete(src)
@@ -85,6 +94,7 @@ export class Playback {
   /** A flush boundary: reported once everything before it has actually been played. */
   marker(responseId: string, segment: number): void {
     if (this.dead.has(responseId) || this.currentId !== responseId) return
+    this.markersSeen += 1
     const end = Math.max(this.nextTime, this.ctx.currentTime)
     const start = this.bounds.length ? this.bounds[this.bounds.length - 1].end : (this.firstStart ?? end)
     this.bounds.push({ segment, start, end })
@@ -126,6 +136,7 @@ export class Playback {
     }
 
     this.markers = this.markers.filter((m) => m.responseId !== responseId)
+    if (this.currentId === responseId) this.pendingStarts = [] // paused: no further cues for this response
     if (this.currentId === responseId) this.resetResponse()
 
     setTimeout(
@@ -170,10 +181,16 @@ export class Playback {
     this.carry = null
     this.markers = []
     this.bounds = []
+    this.pendingStarts = []
+    this.markersSeen = 0
+    this.scheduledSegment = -1
   }
 
   private resetResponse(): void {
     this.bounds = []
+    this.pendingStarts = []
+    this.markersSeen = 0
+    this.scheduledSegment = -1
     this.currentId = null
     this.nextTime = 0
     this.firstStart = null
@@ -190,6 +207,11 @@ export class Playback {
     if (!this.startedReported && this.firstStart !== null && t >= this.firstStart) {
       this.startedReported = true
       this.report({ kind: 'started', responseId: id, at: Date.now() })
+    }
+
+    while (this.pendingStarts.length && t >= this.pendingStarts[0].at) {
+      const p = this.pendingStarts.shift()!
+      this.report({ kind: 'segmentStart', responseId: id, segment: p.segment, at: Date.now() })
     }
 
     while (this.markers.length && t >= this.markers[0].at) {

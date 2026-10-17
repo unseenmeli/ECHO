@@ -74,6 +74,7 @@ async function connect(wsUrl) {
 const engineConsole = []
 async function launch(fakes, extraEnv = {}) {
   const env = {
+    ECHO_DEBUG_HOOKS: '1',
     ...process.env,
     ANTHROPIC_API_KEY: 'test-anthropic-key',
     DEEPGRAM_API_KEY: 'test-deepgram-key',
@@ -84,6 +85,7 @@ async function launch(fakes, extraEnv = {}) {
   const logs = []
   const chromiumFlags = [
     `--remote-debugging-port=${DEBUG_PORT}`,
+    '--inspect=9342',
     '--use-fake-ui-for-media-stream',
     '--use-fake-device-for-media-stream',
     `--use-file-for-fake-audio-capture=${wavPath}`
@@ -132,6 +134,27 @@ async function launch(fakes, extraEnv = {}) {
 }
 
 let debugDump = null
+// --- Whiteboard access through the main-process inspector (ECHO_DEBUG_HOOKS=1) ---------------------
+async function mainEval(expression) {
+  const list = await (await fetch('http://127.0.0.1:9342/json')).json()
+  const ws = new WebSocket(list[0].webSocketDebuggerUrl)
+  await new Promise((r, j) => ((ws.onopen = r), (ws.onerror = j)))
+  const out = await new Promise((resolve) => {
+    ws.onmessage = (e) => resolve(JSON.parse(e.data))
+    ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }))
+  })
+  ws.close()
+  if (out.result?.exceptionDetails) throw new Error(JSON.stringify(out.result.exceptionDetails).slice(0, 300))
+  return out.result?.result?.value
+}
+const sceneSummary = () =>
+  mainEval(`__echoBoard.getScene().then((s) => ({
+    viewport: s.viewport,
+    elements: s.elements.map((e) => ({ id: e.id, type: e.type, x: e.x, y: e.y, w: e.width, h: e.height, opacity: e.opacity, text: e.text, containerId: e.containerId, echo: e.customData && e.customData.echo ? e.customData.echo : null, points: e.points || null, startBinding: e.startBinding ? e.startBinding.elementId : null, endBinding: e.endBinding ? e.endBinding.elementId : null, bound: (e.boundElements || []).map((b) => b.id) }))
+  }))`)
+
+// The tutor writes its drawing inside the segment, before the narration.
+const withDraw = (segment, plan) => segment.replace('<say>', `<draw>${JSON.stringify(plan)}</draw><say>`)
 const results = []
 function check(name, ok, detail = '') {
   results.push({ name, ok })
@@ -372,6 +395,299 @@ const scenarios = {
       const text = await lp.eval(`document.querySelector('.voice-dock')?.innerText ?? ''`)
       check('lesson dock shows the status, transcript and controls', /ECHO is speaking/.test(text) && /sentence number 1/.test(text) && /Talk to ECHO|End/.test(text), text.slice(0, 200))
       lp.close()
+    } finally {
+      await app.quit()
+      await fakes.close()
+    }
+  },
+
+  async lesson() {
+    console.log('\n[lesson] spoken explanation + whiteboard drawing in step, with the user\'s own drawing on the board')
+    const dir = process.env.E2E_SHOT_DIR
+    const fs = await import('node:fs')
+    const SEG1 = '<segment><objective>How a page is fetched</objective><say>Your browser first asks a DNS server for the address. The DNS server answers with the number of the site. Then the browser requests the page from the web server.</say><visual>yes</visual><facts>- Browser asks DNS for the address\n- Browser requests the page from the web server</facts></segment>'
+    const SEG2 = '<segment><objective>What comes back</objective><say>The web server sends back an HTML page that the browser displays.</say><visual>yes</visual></segment>'
+    const plan1 = {
+      setup: [{ op: 'diagram', id: 'web', title: 'Fetching a web page', layout: 'row', nodes: [{ id: 'browser', label: 'Browser' }, { id: 'dns', label: 'DNS server', detail: 'finds the address' }, { id: 'server', label: 'Web server' }], edges: [{ from: 'browser', to: 'dns', label: 'asks' }, { from: 'browser', to: 'server', label: 'requests page' }] }],
+      cues: [{ sentence: 1, ops: [{ op: 'highlight', targets: ['dns'] }] }, { sentence: 2, ops: [{ op: 'highlight', targets: ['server'] }] }]
+    }
+    const plan2 = {
+      setup: [{ op: 'add', diagram: 'web', near: 'server', side: 'below', nodes: [{ id: 'html', label: 'HTML page' }], edges: [{ from: 'server', to: 'html', label: 'sends' }] }],
+      cues: [{ sentence: 0, ops: [{ op: 'highlight', targets: ['html'] }] }]
+    }
+    const fakes = await startFakes({ replyText: [[withDraw(SEG1, plan1), withDraw(SEG2, plan2)]], tokenDelayMs: 8, autoTurns: false })
+    const app = await launch(fakes)
+    try {
+      await app.click('Start lesson')
+      const lessonTarget = await until(async () => (await targets()).find((t) => t.title === 'Lesson'), 15000, 'lesson window')
+      const lp = await connect(lessonTarget.webSocketDebuggerUrl)
+      await until(async () => (await mainEval('typeof __echoBoard.getScene')) === 'function', 8000, 'board hook')
+      await until(async () => (await sceneSummary().catch(() => null)) !== null, 15000, 'board ready')
+
+      // The learner's own drawing is already on the board.
+      await mainEval(`__echoBoard.upsertElements([{ id: 'user-sketch', type: 'rectangle', x: 40, y: 180, width: 220, height: 120, backgroundColor: '#fff3bf', strokeColor: '#e0b100', label: { text: 'my idea' } }])`)
+      const userBefore = (await sceneSummary()).elements.find((e) => e.id === 'user-sketch')
+
+      await app.click('Start conversation')
+      await until(async () => (await app.states()).includes('listening'), 20000, 'listening')
+      const tAsk = Date.now()
+      fakes.fluxSend({ type: 'TurnInfo', event: 'StartOfTurn', turn_index: 0, transcript: 'How' })
+      fakes.fluxSend({ type: 'TurnInfo', event: 'EndOfTurn', turn_index: 0, transcript: 'How does a browser get a web page?', trigger: 'model' })
+
+      // Poll the live board, recording when things appear relative to when ECHO started speaking.
+      const seen = {}
+      let spokeAt = null
+      let shotSetup = false
+      const timeline = []
+      for (let i = 0; i < 400; i++) {
+        const scene = await sceneSummary()
+        const ids = new Set(scene.elements.map((e) => e.id))
+        const states = await app.states()
+        if (spokeAt === null && states.includes('speaking')) spokeAt = Date.now()
+        for (const id of ['echo:browser', 'echo:hl_dns', 'echo:hl_server', 'echo:html', 'echo:hl_html']) {
+          if (ids.has(id) && seen[id] === undefined) {
+            seen[id] = Date.now()
+            timeline.push([id, seen[id] - tAsk, spokeAt ? seen[id] - spokeAt : null, JSON.stringify([scene.viewport.zoom, Math.round(scene.viewport.scrollX), Math.round(scene.viewport.scrollY)])])
+          }
+        }
+        if (dir && !shotSetup && ids.has('echo:browser')) {
+          shotSetup = true
+          await sleep(900) // let the camera finish animating to the new diagram
+          fs.writeFileSync(path.join(dir, 'lesson-1-setup.png'), Buffer.from((await lp.send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+        }
+        if (dir && ids.has('echo:hl_server') && !seen.__shot2) {
+          seen.__shot2 = true
+          await sleep(500)
+          fs.writeFileSync(path.join(dir, 'lesson-2-highlight.png'), Buffer.from((await lp.send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+        }
+        const s = await app.states()
+        if (ids.has('echo:html') && s.lastIndexOf('listening') > s.lastIndexOf('speaking') && s.includes('speaking')) break
+        await sleep(100)
+      }
+      console.log('        timeline (ms since question / since speech began):', JSON.stringify(timeline))
+
+      const scene = await sceneSummary()
+      const byId = new Map(scene.elements.map((e) => [e.id, e]))
+      const nodes = ['browser', 'dns', 'server', 'html'].map((n) => byId.get('echo:' + n))
+      check('every node the tutor mentioned was drawn', nodes.every(Boolean), JSON.stringify(nodes.map(Boolean)))
+      const labelOf = (id) => scene.elements.find((e) => e.containerId === id)?.text
+      check('nodes carry their labels (bound text)', labelOf('echo:browser') === 'Browser' && /DNS server/.test(labelOf('echo:dns') ?? '') && labelOf('echo:server') === 'Web server', JSON.stringify([labelOf('echo:browser'), labelOf('echo:dns')]))
+      const arrows = scene.elements.filter((e) => e.type === 'arrow' && e.echo?.kind === 'edge')
+      check('arrows were drawn and bound to the right nodes', arrows.length === 3 && arrows.every((a) => a.startBinding && a.endBinding) && arrows.some((a) => a.startBinding === 'echo:browser' && a.endBinding === 'echo:dns'), JSON.stringify(arrows.map((a) => [a.startBinding, a.endBinding])))
+      check('arrow labels are present', ['asks', 'requests page', 'sends'].every((l) => scene.elements.some((e) => e.text === l)))
+      const rects = nodes.map((n) => ({ id: n.id, x: n.x, y: n.y, w: n.w, h: n.h }))
+      let overlap = false
+      for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i], b = rects[j]
+        if (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y) overlap = true
+      }
+      check('no overlapping nodes on the real canvas', !overlap)
+      // Geometry of what Excalidraw really rendered: arrows must not pass through nodes, labels must not touch lines or nodes.
+      const segHits = (a, b, r, pad) => {
+        const x0 = r.x - pad, y0 = r.y - pad, x1 = r.x + r.w + pad, y1 = r.y + r.h + pad
+        let t0 = 0, t1 = 1
+        const dx = b.x - a.x, dy = b.y - a.y
+        for (const [p, q] of [[-dx, a.x - x0], [dx, x1 - a.x], [-dy, a.y - y0], [dy, y1 - a.y]]) {
+          if (p === 0) { if (q < 0) return false } else { const t = q / p; if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t } else { if (t < t0) return false; if (t < t1) t1 = t } }
+        }
+        return true
+      }
+      const nodeEls = ['browser', 'dns', 'server', 'html'].map((n) => ({ id: 'echo:' + n, x: byId.get('echo:' + n).x, y: byId.get('echo:' + n).y, w: byId.get('echo:' + n).w, h: byId.get('echo:' + n).h }))
+      let thru = []
+      let lblOnLine = []
+      let lblOnNode = []
+      for (const a of scene.elements.filter((e) => e.type === 'arrow' && e.echo?.kind === 'edge')) {
+        const pts = a.points.map(([px, py]) => ({ x: a.x + px, y: a.y + py }))
+        for (const n of nodeEls) {
+          if (n.id === a.startBinding || n.id === a.endBinding) continue
+          for (let i = 0; i < pts.length - 1; i++) if (segHits(pts[i], pts[i + 1], n, 0)) thru.push(a.id + ' x ' + n.id)
+        }
+        const lbl = scene.elements.find((e) => e.id === a.id + ':label')
+        if (lbl) {
+          const box = { x: lbl.x, y: lbl.y, w: lbl.w, h: lbl.h }
+          for (let i = 0; i < pts.length - 1; i++) if (segHits(pts[i], pts[i + 1], box, 1)) lblOnLine.push(`${lbl.text} box=${JSON.stringify(box)} line=${JSON.stringify(pts)}`)
+          for (const n of nodeEls) if (box.x < n.x + n.w && box.x + box.w > n.x && box.y < n.y + n.h && box.y + box.h > n.y) lblOnNode.push(lbl.text + ' on ' + n.id)
+        }
+      }
+      check('no arrow passes through a node it does not connect', thru.length === 0, thru.join(', '))
+      check('no arrow label touches its own line or any node', lblOnLine.length === 0 && lblOnNode.length === 0, JSON.stringify({ lblOnLine, lblOnNode }))
+      const title = scene.elements.find((e) => e.id === 'echo:web:title')
+      const arrowPts = scene.elements.filter((e) => e.type === 'arrow' && e.echo?.kind === 'edge').flatMap((a) => a.points.map(([px, py]) => ({ x: a.x + px, y: a.y + py })))
+      check('nothing collides with the diagram title', !!title && !scene.elements.some((e) => e.id.includes(':label') && e.x < title.x + title.w && e.x + e.w > title.x && e.y < title.y + title.h && e.y + e.h > title.y), 'title/label overlap')
+      void arrowPts
+      const cam = scene.viewport
+      check('the camera did not move for content that fit in view (the user\'s sketch stays visible)', cam.zoom === 1 && cam.scrollX === 0 && cam.scrollY === 0, JSON.stringify({ zoom: cam.zoom, scrollX: cam.scrollX, scrollY: cam.scrollY }))
+      const user = byId.get('user-sketch')
+      check("the user's own drawing is untouched and not claimed by the lesson", !!user && user.x === userBefore.x && user.y === userBefore.y && user.echo === null)
+      check('the lesson did not draw over the user\'s sketch', nodes.every((n) => !(n.x < user.x + user.w && n.x + n.w > user.x && n.y < user.y + user.h && n.y + n.h > user.y)))
+      check('all drawn elements are tagged as lesson-owned with a segment id', scene.elements.filter((e) => e.id.startsWith('echo:') && e.type !== 'text').every((e) => e.echo && e.echo.seg))
+
+      // Timing: the diagram exists before ECHO speaks; highlights follow playback, one sentence at a time.
+      check('the diagram was on the board before speech started', seen['echo:browser'] !== undefined && spokeAt !== null && seen['echo:browser'] <= spokeAt + 50, JSON.stringify({ drew: seen['echo:browser'] - tAsk, spoke: spokeAt - tAsk }))
+      check('highlight for sentence 2 came after speech started and before the one for sentence 3', seen['echo:hl_dns'] >= spokeAt && seen['echo:hl_server'] > seen['echo:hl_dns'], JSON.stringify(timeline))
+      const gap = seen['echo:hl_server'] - seen['echo:hl_dns']
+      check('cues are spaced by real audio durations (not fired together)', gap > 1200, `gap ${gap}ms`)
+      check('the next segment\'s drawing only appeared when the previous segment reached its last sentence', seen['echo:html'] >= seen['echo:hl_server'] - 100, JSON.stringify(timeline))
+      const logs = app.logs.join('')
+      const m = logs.match(/\[lesson\] metrics (\{[^\n]*"segmentId":"s1"[^\n]*\})/)
+      const metrics = m ? JSON.parse(m[1]) : null
+      check('dev metrics reported (drawing check, setup applied, audio start, cue delays)', !!metrics && metrics.mode === 'visual' && metrics.cueDelaysMs?.length === 2, m?.[1] ?? 'none')
+      if (metrics) console.log('        s1 metrics:', JSON.stringify(metrics))
+      if (metrics?.cueDelaysMs) check('cues were applied within 250 ms of their audio starting', metrics.cueDelaysMs.every((d) => d < 250), JSON.stringify(metrics.cueDelaysMs))
+
+      // After the explanation, highlights are cleaned away.
+      await until(async () => !(await sceneSummary()).elements.some((e) => e.id.startsWith('echo:hl_')), 8000, 'highlights cleared')
+      check('highlight rings are removed when the explanation ends, the diagram stays', (await sceneSummary()).elements.some((e) => e.id === 'echo:browser'))
+      check('one tutor request writes both narration and drawing: no second model call', fakes.log.claude.requests.length === 1 && !fakes.log.claude.requests[0].tools && /LESSON MODE/.test(String(fakes.log.claude.requests[0].system)), String(fakes.log.claude.requests.length))
+      check('no keys in logs', !logs.includes('test-anthropic-key'))
+      lp.close()
+    } finally {
+      await app.quit()
+      await fakes.close()
+    }
+  },
+
+  async lessonInterrupt() {
+    console.log('\n[lessonInterrupt] interrupting stops speech AND pending drawing; what is drawn stays')
+    const SEG1 = '<segment><objective>How a page is fetched</objective><say>Your browser first asks a DNS server for the address. The DNS server answers with the number of the site. Then the browser requests the page from the web server.</say><visual>yes</visual></segment>'
+    const SEG2 = '<segment><objective>What comes back</objective><say>The web server sends back an HTML page that the browser displays.</say><visual>yes</visual></segment>'
+    const plan1 = {
+      setup: [{ op: 'diagram', id: 'web', layout: 'row', nodes: [{ id: 'browser', label: 'Browser' }, { id: 'dns', label: 'DNS server' }, { id: 'server', label: 'Web server' }], edges: [{ from: 'browser', to: 'dns', label: 'asks' }] }],
+      cues: [{ sentence: 1, ops: [{ op: 'highlight', targets: ['dns'] }] }, { sentence: 2, ops: [{ op: 'highlight', targets: ['server'] }] }]
+    }
+    const plan2 = { setup: [{ op: 'add', diagram: 'web', near: 'server', side: 'below', nodes: [{ id: 'html', label: 'HTML page' }] }], cues: [] }
+    const fakes = await startFakes({ replyText: [[withDraw(SEG1, plan1), withDraw(SEG2, plan2)], ['<segment><objective>x</objective><say>Sure, the browser asks DNS for the address first, nothing else.</say></segment>']], tokenDelayMs: 8, autoTurns: false })
+    const app = await launch(fakes)
+    try {
+      await app.click('Start lesson')
+      await until(async () => (await targets()).find((t) => t.title === 'Lesson'), 15000, 'lesson window')
+      await until(async () => (await sceneSummary().catch(() => null)) !== null, 15000, 'board ready')
+      await app.click('Start conversation')
+      await until(async () => (await app.states()).includes('listening'), 20000, 'listening')
+      fakes.fluxSend({ type: 'TurnInfo', event: 'StartOfTurn', turn_index: 0, transcript: 'How' })
+      fakes.fluxSend({ type: 'TurnInfo', event: 'EndOfTurn', turn_index: 0, transcript: 'How does a browser get a web page?', trigger: 'model' })
+      await until(async () => (await sceneSummary()).elements.some((e) => e.id === 'echo:hl_dns'), 20000, 'first highlight')
+      const clears = fakes.log.tts.clears
+      fakes.fluxSend({ type: 'TurnInfo', event: 'StartOfTurn', turn_index: 1, transcript: 'Wait' })
+      await until(async () => fakes.log.tts.clears > clears, 3000, 'TTS clear')
+      const before = await sceneSummary()
+      await sleep(5500) // longer than the next sentence would take
+      const after = await sceneSummary()
+      check('speech stopped immediately (TTS cleared, no audio after clear)', fakes.log.tts.audioAfterClear === 0)
+      check('the highlight for the NEXT sentence never appeared after the interruption', !after.elements.some((e) => e.id === 'echo:hl_server'))
+      check('the next segment was never released: its drawing did not appear (no stale drawing)', !after.elements.some((e) => e.id === 'echo:html'))
+      check('everything already shown stays on the board', ['browser', 'dns', 'server'].every((n) => after.elements.some((e) => e.id === 'echo:' + n)))
+      check('the board did not change at all after the interruption', after.elements.length === before.elements.length)
+      fakes.fluxSend({ type: 'TurnInfo', event: 'EndOfTurn', turn_index: 1, transcript: 'Wait, just tell me about the DNS part.', trigger: 'model' })
+      await until(() => fakes.log.claude.requests.filter((r) => !r.tools).length >= 2, 8000, 'follow-up tutor request')
+      const follow = fakes.log.claude.requests.filter((r) => !r.tools)[1]
+      const lastMsg = follow.messages.at(-1).content
+      check('the follow-up tutor request carries the board and where the user cut in', /lesson_context/.test(lastMsg) && /Fetching|diagram/i.test(lastMsg) && /interrupted during s1/.test(lastMsg), lastMsg.slice(-500))
+    } finally {
+      await app.quit()
+      await fakes.close()
+    }
+  },
+
+  async lessonChart() {
+    console.log('\n[lessonChart] a chart is drawn from the tutor-supplied numbers only, with units and source')
+    const dir = process.env.E2E_SHOT_DIR
+    const fs = await import('node:fs')
+    const SEG = '<segment><objective>Falling speed</objective><data id="speed" label="Falling speed" unit="m/s" x_label="Seconds" illustrative="false" source="physics textbook">\n0: 0\n1: 9.8\n2: 19.6\n3: 29.4\n</data><say>A falling object speeds up steadily. After three seconds it is moving much faster than after one.</say></segment>'
+    const plan = { setup: [{ op: 'chart', id: 'fall', data: 'speed', kind: 'line', title: 'Falling speed' }], cues: [{ sentence: 1, ops: [{ op: 'highlight', targets: ['fall'] }] }] }
+    const fakes = await startFakes({ replyText: [[withDraw(SEG, plan)]], tokenDelayMs: 8, autoTurns: false })
+    const app = await launch(fakes)
+    try {
+      await app.click('Start lesson')
+      const lessonTarget = await until(async () => (await targets()).find((t) => t.title === 'Lesson'), 15000, 'lesson window')
+      const lp = await connect(lessonTarget.webSocketDebuggerUrl)
+      await until(async () => (await sceneSummary().catch(() => null)) !== null, 15000, 'board ready')
+      await app.click('Start conversation')
+      await until(async () => (await app.states()).includes('listening'), 20000, 'listening')
+      fakes.fluxSend({ type: 'TurnInfo', event: 'StartOfTurn', turn_index: 0, transcript: 'How' })
+      fakes.fluxSend({ type: 'TurnInfo', event: 'EndOfTurn', turn_index: 0, transcript: 'How does falling speed change over time?', trigger: 'model' })
+      await until(async () => (await sceneSummary()).elements.some((e) => e.id === 'echo:fall__yaxis'), 20000, 'chart drawn')
+      await sleep(800)
+      const scene = await sceneSummary()
+      const texts = scene.elements.filter((e) => e.type === 'text').map((e) => e.text)
+      for (const v of ['0', '9.8', '19.6', '29.4']) check(`value ${v} is labelled on the chart`, texts.includes(v))
+      check('the unit and axis titles are shown', texts.includes('Falling speed (m/s)') && texts.includes('Seconds'))
+      check('the source is shown and the data is NOT marked illustrative', texts.includes('Source: physics textbook') && !texts.some((t) => /Illustrative/.test(t ?? '')))
+      check('a marker per data point and a connecting line', scene.elements.filter((e) => e.id.includes('__dot')).length === 4 && scene.elements.some((e) => e.id === 'echo:fall__line'))
+      console.log('        chart line geometry:', JSON.stringify(scene.elements.filter((e) => /__(xaxis|yaxis|line|grid)/.test(e.id)).map((e) => [e.id.replace('echo:fall__', ''), Math.round(e.x), Math.round(e.y), Math.round(e.w), Math.round(e.h)])))
+      console.log('        ring:', JSON.stringify(scene.elements.filter((e) => e.id.startsWith('echo:hl_')).map((e) => [Math.round(e.x), Math.round(e.y), Math.round(e.w), Math.round(e.h)])))
+      const untagged = scene.elements.filter((e) => e.id.startsWith('echo:') && !e.echo).map((e) => e.id + ':' + e.type)
+      check('every chart element (lines, dots, labels) is tagged as lesson-owned', untagged.length === 0, untagged.slice(0, 6).join(', '))
+      const dots = scene.elements.filter((e) => e.id.includes('__dot')).sort((a, b) => a.x - b.x)
+      const base = scene.elements.find((e) => e.id === 'echo:fall__xaxis')
+      const hs = dots.map((d) => base.y - (d.y + 6))
+      check('point heights are proportional to the supplied values', Math.abs(hs[2] / hs[1] - 2) < 0.05 && Math.abs(hs[3] / hs[1] - 3) < 0.05, JSON.stringify(hs))
+      await until(async () => (await sceneSummary()).elements.some((e) => e.id === 'echo:hl_fall'), 15000, 'chart highlight cue')
+      check('the chart is highlighted when the narration reaches it (block-level highlight)', true)
+      if (dir) {
+        await sleep(400)
+        fs.writeFileSync(path.join(dir, 'lesson-chart.png'), Buffer.from((await lp.send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+      }
+      lp.close()
+    } finally {
+      await app.quit()
+      await fakes.close()
+    }
+  },
+
+  async lessonReopen() {
+    console.log('\n[lessonReopen] closing and reopening the lesson window: no duplicate sessions, listeners or drawings')
+    const SEG1 = '<segment><objective>How a page is fetched</objective><say>Your browser first asks a DNS server for the address. The DNS server answers with the number of the site. Then the browser requests the page from the web server.</say><visual>yes</visual></segment>'
+    const SEG2 = '<segment><objective>What comes back</objective><say>The web server sends back an HTML page that the browser displays.</say><visual>yes</visual></segment>'
+    const SEGB = '<segment><objective>Caching</objective><say>Browsers keep a copy of pages they have already seen. That makes the next visit much faster.</say><visual>yes</visual></segment>'
+    const plan1 = { setup: [{ op: 'diagram', id: 'web', layout: 'row', nodes: [{ id: 'browser', label: 'Browser' }, { id: 'dns', label: 'DNS server' }, { id: 'server', label: 'Web server' }], edges: [{ from: 'browser', to: 'dns', label: 'asks' }] }], cues: [{ sentence: 1, ops: [{ op: 'highlight', targets: ['dns'] }] }] }
+    const plan2 = { setup: [{ op: 'add', diagram: 'web', near: 'server', side: 'below', nodes: [{ id: 'html', label: 'HTML page' }] }], cues: [] }
+    const planB = { setup: [{ op: 'add', diagram: 'web', near: 'browser', side: 'below', nodes: [{ id: 'cache', label: 'Cache' }], edges: [{ from: 'browser', to: 'cache', label: 'keeps a copy' }] }], cues: [] }
+    const fakes = await startFakes({ replyText: [[withDraw(SEG1, plan1), withDraw(SEG2, plan2)], [withDraw(SEGB, planB)]], tokenDelayMs: 8, autoTurns: false })
+    const app = await launch(fakes)
+    const lessonTargets = async () => (await targets()).filter((t) => t.title === 'Lesson')
+    try {
+      // Open, close, open again.
+      await app.click('Start lesson')
+      let lt = await until(async () => (await lessonTargets())[0], 15000, 'lesson window')
+      await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/close/${lt.id}`)
+      await until(async () => (await lessonTargets()).length === 0, 8000, 'lesson window closed')
+      await app.click('Start lesson')
+      await until(async () => (await lessonTargets()).length === 1, 15000, 'lesson window reopened')
+      check('reopening gives exactly one lesson window', (await lessonTargets()).length === 1)
+      await until(async () => (await sceneSummary().catch(() => null)) !== null, 15000, 'board ready')
+
+      await app.click('Start conversation')
+      await until(async () => (await app.states()).includes('listening'), 20000, 'listening')
+      fakes.fluxSend({ type: 'TurnInfo', event: 'StartOfTurn', turn_index: 0, transcript: 'How' })
+      fakes.fluxSend({ type: 'TurnInfo', event: 'EndOfTurn', turn_index: 0, transcript: 'How does a browser get a web page?', trigger: 'model' })
+      await until(async () => (await sceneSummary()).elements.some((e) => e.id === 'echo:hl_dns'), 20000, 'first highlight')
+
+      // Close the window in the middle of the lesson.
+      lt = (await lessonTargets())[0]
+      await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/close/${lt.id}`)
+      await until(async () => (await lessonTargets()).length === 0, 8000, 'window closed mid-lesson')
+      await until(async () => {
+        const s = await app.states()
+        return s.lastIndexOf('listening') > s.lastIndexOf('speaking') && s.includes('speaking')
+      }, 40000, 'the explanation finishes verbally')
+      check('closing the window mid-lesson does not break the voice conversation (it finishes verbally)', (await app.states()).at(-1) === 'listening')
+      check('only one speech-recognition and one voice-output socket exist', fakes.log.flux.connections === 1 && fakes.log.tts.connections === 1, `${fakes.log.flux.connections}/${fakes.log.tts.connections}`)
+      check('the app is still responsive after the window closed', (await targets()).some((t) => t.title === 'Companion'))
+
+      // Reopen: the board comes back with exactly what was drawn, and a follow-up extends it.
+      await app.click('Start lesson')
+      await until(async () => (await lessonTargets()).length === 1, 15000, 'lesson window reopened again')
+      await until(async () => (await sceneSummary().catch(() => ({ elements: [] }))).elements.some((e) => e.id === 'echo:browser'), 15000, 'diagram restored')
+      const restored = await sceneSummary()
+      const dupes = (els) => els.map((e) => e.id).filter((id, i, a) => a.indexOf(id) !== i)
+      check('the reopened board shows the diagram that was drawn before, without duplicates', restored.elements.some((e) => e.id === 'echo:dns') && dupes(restored.elements).length === 0, dupes(restored.elements).join())
+      fakes.fluxSend({ type: 'TurnInfo', event: 'StartOfTurn', turn_index: 1, transcript: 'And' })
+      fakes.fluxSend({ type: 'TurnInfo', event: 'EndOfTurn', turn_index: 1, transcript: 'And what about caching?', trigger: 'model' })
+      await until(async () => (await sceneSummary()).elements.some((e) => e.id === 'echo:cache'), 30000, 'follow-up drawing')
+      const after = await sceneSummary()
+      check('the follow-up extended the existing diagram once (no duplicated elements, existing nodes untouched)', dupes(after.elements).length === 0 && after.elements.filter((e) => e.id === 'echo:browser').length === 1 && after.elements.find((e) => e.id === 'echo:browser').x === restored.elements.find((e) => e.id === 'echo:browser').x, dupes(after.elements).join())
+      check('still a single voice session', fakes.log.flux.connections === 1 && (await lessonTargets()).length === 1)
     } finally {
       await app.quit()
       await fakes.close()

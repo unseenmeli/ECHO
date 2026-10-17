@@ -39,6 +39,9 @@ export interface VoiceConfig {
   deepgramBase: string
 
   logMetrics: boolean
+
+  /** Whiteboard visuals alongside the spoken lesson (needs the lesson window open). */
+  visualsEnabled: boolean
 }
 
 const num = (v: string | undefined, fallback: number, min: number, max: number): number => {
@@ -99,7 +102,8 @@ export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigRes
       bargeInMs: env.ECHO_BARGE_IN_MS?.trim() === '0' ? 0 : num(env.ECHO_BARGE_IN_MS, 450, 150, 3000),
       ttsVoice: env.ECHO_TTS_VOICE?.trim() || 'aura-2-thalia-en',
       deepgramBase: (env.ECHO_DEEPGRAM_WS_BASE?.trim() || 'wss://api.deepgram.com').replace(/\/+$/, ''),
-      logMetrics: bool(env.ECHO_LOG_METRICS, true)
+      logMetrics: bool(env.ECHO_LOG_METRICS, true),
+      visualsEnabled: bool(env.ECHO_VISUALS, true),
     }
   }
 }

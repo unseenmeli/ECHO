@@ -159,7 +159,23 @@ export async function startFakes(opts = {}) {
       log.claude.requests.push(parsed)
       log.claude.keyHeader.push(req.headers['x-api-key'] ?? '')
       const index = log.claude.requests.length - 1
-      const texts = Array.isArray(replyFor[0]) ? (replyFor[index] ?? replyFor[replyFor.length - 1]) : replyFor
+      if (Array.isArray(parsed.tools) && parsed.tools.some((t) => t.name === 'plan_visuals')) {
+        // Visuals agent: a single non-streaming message carrying a tool_use block.
+        log.claude.visualCalls = (log.claude.visualCalls ?? 0) + 1
+        const plans = opts.visualPlans ?? []
+        const call = log.claude.visualCalls - 1
+        const step = plans[call] ?? { no_visual: true, setup: [], cues: [] }
+        const delay = step.__delayMs ?? opts.visualDelayMs ?? 150
+        const { __delayMs, ...input } = step
+        setTimeout(() => {
+          if (res.destroyed) return
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ id: 'msg_vis', type: 'message', role: 'assistant', model: parsed.model, content: [{ type: 'tool_use', id: 'toolu_' + call, name: 'plan_visuals', input }], stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 10, output_tokens: 10 } }))
+        }, delay)
+        return
+      }
+      const tutorIndex = log.claude.requests.filter((r) => !r.tools).length - 1
+      const texts = Array.isArray(replyFor[0]) ? (replyFor[tutorIndex] ?? replyFor[replyFor.length - 1]) : replyFor
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       const ev = (name, data) => res.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
       ev('message_start', { type: 'message_start', message: { id: 'msg_test', type: 'message', role: 'assistant', model: parsed.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } })
