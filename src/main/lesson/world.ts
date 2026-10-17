@@ -5,7 +5,7 @@ import { union, type Rect } from './layout'
 export interface EchoMeta {
   /** Logical id the agents use. */
   id: string
-  kind: 'node' | 'edge' | 'title' | 'part' | 'ring' | 'note' | 'group' | 'shadow' | 'code' | 'line'
+  kind: 'node' | 'edge' | 'title' | 'part' | 'ring' | 'note' | 'group' | 'shadow' | 'code' | 'line' | 'image'
   /** Diagram / chart / table block this belongs to. */
   block?: string
   seg?: string

@@ -107,6 +107,10 @@ export function createBoardController(api: ExcalidrawImperativeAPI): BoardApi {
 
     async applyBatch(batch: BoardBatch): Promise<BatchResult> {
       if (batch.upsert.length) await lessonFontsReady()
+      // Picture data first: image elements in this batch refer to it by fileId.
+      if (batch.files?.length) {
+        api.addFiles(batch.files.map((f) => ({ id: f.id, dataURL: f.dataURL, mimeType: f.mimeType, created: Date.now() })) as never)
+      }
       const next = [...all()]
       const indexOf = (): Map<string, number> => new Map(next.map((e, i) => [e.id, i]))
       const result: BatchResult = { upserted: [], patched: [], removed: [] }

@@ -1,6 +1,7 @@
 import type { BatchResult, BoardBatch, BoardElement, BoardViewport } from '../../shared/board'
 import type { ChatMessage } from '../voice/history'
 import type { VisualOp, VisualPlan } from './ops'
+import type { Picture, PictureLookup } from './pictures'
 import { mergeBatch, translateOps } from './translate'
 import { stripDeictic, toTeachingSegment, type Drawing, type ParsedSegment } from './tutorProtocol'
 import type { LessonStatus, SegmentMetrics, TeachingSegment } from './types'
@@ -42,6 +43,8 @@ export function describePlan(plan: VisualPlan): string {
         return `add ${(op.nodes ?? []).map((n) => n.id).join(',') || 'edges'}`
       case 'code':
         return `code ${op.id}(${op.language}, ${op.lines.length} lines)`
+      case 'image':
+        return `image ${op.id}(${op.search ?? 'link'})`
       case 'chart':
       case 'table':
       case 'timeline':
@@ -70,6 +73,8 @@ export class LessonState {
   presented: Array<{ id: string; objective: string; sentences: string[]; heard: number; complete: boolean }> = []
   visualHistory: Array<{ segment: string; objective: string; ops: string }> = []
   interruptedAt: { segmentId: string; sentence: number } | null = null
+  /** Pictures found for this lesson's image ops, by op id; kept so later drawing can refer to them. */
+  pictures = new Map<string, Picture>()
   /** What the current lesson is about: the first step's objective, reset when the learner changes topic. */
   topic: string | null = null
 
@@ -114,9 +119,26 @@ export interface LessonTurnDeps {
   lesson: LessonState
   question: string
   dialogue: ChatMessage[]
+  /** Finds real pictures for image ops. Without it, image ops are dropped. */
+  pictures?: PictureLookup
 }
 
 const PREP_TIMEOUT_MS = 3000
+
+/** The plan without the given image ops, and without highlights or focus that only pointed at them. */
+export function withoutImages(plan: VisualPlan, ids: Set<string>): VisualPlan {
+  const keep = (ops: VisualOp[]): VisualOp[] =>
+    ops.flatMap((op): VisualOp[] => {
+      if (op.op === 'image' && ids.has(op.id)) return []
+      if (op.op === 'highlight' || op.op === 'focus') {
+        const targets = op.targets.filter((t) => !ids.has(t))
+        return targets.length ? [{ ...op, targets }] : []
+      }
+      if (op.op === 'note' && op.near && ids.has(op.near)) return [{ ...op, near: undefined }]
+      return [op]
+    })
+  return { ...plan, setup: keep(plan.setup), cues: plan.cues.map((c) => ({ ...c, ops: keep(c.ops) })).filter((c) => c.ops.length) }
+}
 
 export class LessonTurn {
   private segs: Seg[] = []
@@ -184,7 +206,10 @@ export class LessonTurn {
     try {
       if (s.drawing?.error) throw new Error(s.drawing.error)
       const board = this.deps.board!
+      // Pictures are looked up while the board is read (both while the previous segment is still being spoken).
+      const picturesFound = this.findPictures(s.drawing!.plan!)
       const scene = await Promise.race([board.getScene(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('whiteboard did not answer')), PREP_TIMEOUT_MS))])
+      const missing = await picturesFound
       if (!this.alive()) return
 
       // The board as it WILL look once earlier segments' remaining drawing has been applied.
@@ -195,11 +220,16 @@ export class LessonTurn {
         const ops: VisualOp[] = []
         if (!prev.setupApplied) ops.push(...prev.plan.setup)
         for (const [ci, c] of prev.plan.cues.entries()) if (!prev.appliedCues.has(ci)) ops.push(...c.ops)
-        if (ops.length) elements = mergeBatch(elements, translateOps(ops, elements, { segmentId: prev.seg.id, data: prev.seg.data, newTopic: prev.seg.newTopic, viewport: scene.viewport }).batch)
+        if (ops.length) elements = mergeBatch(elements, translateOps(ops, elements, { segmentId: prev.seg.id, data: prev.seg.data, newTopic: prev.seg.newTopic, viewport: scene.viewport, pictures: this.deps.lesson.pictures }).batch)
       }
       const world = World.from(elements)
       const check = (plan: VisualPlan): string[] => validatePlan(plan, { world, sentenceCount: s.seg.sentences.length, data: s.seg.data })
       let plan = s.drawing!.plan!
+      if (missing.size) {
+        this.io.log(`[lesson] ${s.seg.id} no picture found for: ${[...missing].join(', ')}`)
+        plan = withoutImages(plan, missing)
+        if (!plan.setup.length && !plan.cues.length) plan = { ...plan, no_visual: true }
+      }
       let problems = check(plan)
       if (problems.length && plan.cues.length) {
         // Keep the essential drawing if only the timed extras are wrong.
@@ -221,6 +251,21 @@ export class LessonTurn {
     s.prepDoneAt = this.io.now()
     s.metrics.prepMs = s.prepDoneAt - s.readyAt
     this.pump()
+  }
+
+  /** Looks up every picture the plan asks for. Resolves with the ids of the ones that could not be found. */
+  private async findPictures(plan: VisualPlan): Promise<Set<string>> {
+    const ops = [...plan.setup, ...plan.cues.flatMap((c) => c.ops)].filter((o): o is Extract<VisualOp, { op: 'image' }> => o.op === 'image')
+    const missing = new Set<string>()
+    await Promise.all(
+      ops.map(async (op) => {
+        // Always asked (the lookup is cached by search): an id freed by deleting a picture may name a new one.
+        const pic = this.deps.pictures ? await this.deps.pictures.find({ search: op.search, url: op.url }, this.io.signal).catch(() => null) : null
+        if (pic) this.deps.lesson.pictures.set(op.id, pic)
+        else missing.add(op.id)
+      })
+    )
+    return missing
   }
 
   // --- Scheduling ----------------------------------------------------------------------------------
@@ -360,7 +405,7 @@ export class LessonTurn {
       if (!board) throw new Error('No whiteboard is open')
       const scene = await board.getScene() // fresh: the user may have edited since the drawing was checked
       if (!ok()) return
-      const { batch, warnings } = translateOps(ops, scene.elements, { segmentId: s.seg.id, data: s.seg.data, newTopic: s.seg.newTopic, viewport: scene.viewport })
+      const { batch, warnings } = translateOps(ops, scene.elements, { segmentId: s.seg.id, data: s.seg.data, newTopic: s.seg.newTopic, viewport: scene.viewport, pictures: this.deps.lesson.pictures })
       for (const w of warnings) this.io.log(`[lesson] ${s.seg.id} ${label}: ${w}`)
       if (!batch.upsert.length && !batch.patch.length && !batch.remove.length && !batch.focus) return
       await board.applyBatch(batch)

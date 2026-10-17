@@ -12,13 +12,15 @@
     "app:mac": "electron-vite build && electron-builder --mac --dir && rm -rf ~/Desktop/Echo.app && ditto dist/mac-arm64/Echo.app ~/Desktop/Echo.app",
     "dist:mac": "electron-vite build && electron-builder --mac",
     "dist:win": "electron-vite build && electron-builder --win",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval": "vitest run --config vitest.eval.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
     "@excalidraw/excalidraw": "^0.18.1",
     "@fontsource/silkscreen": "^5.3.0",
     "@ricky0123/vad-web": "^0.0.31",
+    "pdfjs-dist": "^6.4.299",
     "pyodide": "^314.0.7",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

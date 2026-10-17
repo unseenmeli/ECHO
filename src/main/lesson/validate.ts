@@ -114,6 +114,12 @@ export function validatePlan(plan: VisualPlan, ctx: ValidationContext): string[]
         op.lines.forEach((_, i) => register(`${op.id}__l${i + 1}`, op.id))
         return
       }
+      case 'image': {
+        if (!fresh(op.id, `${where} image`)) return
+        if (op.near) exists(op.near, `${where} image.near`, true)
+        register(op.id, op.id)
+        return
+      }
       case 'note': {
         if (!fresh(op.id, `${where} note`)) return
         if (op.near) exists(op.near, `${where} note.near`, true)

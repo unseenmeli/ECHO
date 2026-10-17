@@ -70,7 +70,16 @@ export interface BindingSpec {
  * appears (or a highlight moves) in a single frame and is one undo step.
  * Untouched elements, the user's drawings and the camera are left alone.
  */
+/** Image data for `image` elements (Excalidraw keeps it apart from the elements, keyed by fileId). */
+export interface BoardFile {
+  id: string
+  dataURL: string
+  mimeType: string
+}
+
 export interface BoardBatch {
+  /** Pictures that new image elements in `upsert` refer to. Added before the elements. */
+  files?: BoardFile[]
   upsert: ElementSkeleton[]
   patch: ElementPatch[]
   remove: string[]
@@ -101,4 +110,6 @@ export type BoardMethod = keyof BoardApi
 export interface SavedBoard {
   elements: BoardElement[]
   viewport: BoardViewport
+  /** Image data of the pictures on the board (the lesson's and the learner's own pasted ones), by fileId. */
+  files?: Record<string, BoardFile & { created?: number }>
 }

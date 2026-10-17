@@ -110,6 +110,25 @@ const CodeOp = z
   })
   .describe('A code card with line numbers. Python and JavaScript cards get a Run button for the learner.')
 
+const ImageOp = z
+  .object({
+    op: z.literal('image'),
+    id: Id,
+    search: z
+      .string()
+      .min(2)
+      .max(80)
+      .optional()
+      .describe('What to show, as a short Wikimedia Commons search: the thing itself, e.g. "domestic pig", "Golden Gate Bridge", "human heart diagram".'),
+    url: z.string().url().max(500).optional().describe('Only for a picture link the learner gave (https).'),
+    caption: Label.optional(),
+    near: Id.optional().describe('Existing element the picture should sit next to.'),
+    side: z.enum(SIDES).optional(),
+    size: z.enum(['small', 'medium', 'large']).optional()
+  })
+  .refine((o) => !!o.search !== !!o.url, { message: 'give exactly one of "search" or "url"' })
+  .describe('A real picture, looked up by the app and shown with its credit. You never supply image data.')
+
 const NoteOp = z
   .object({
     op: z.literal('note'),
@@ -163,6 +182,7 @@ export const VisualOpSchema = z.discriminatedUnion('op', [
   TableOp,
   TimelineOp,
   CodeOp,
+  ImageOp,
   NoteOp,
   HighlightOp,
   UnhighlightOp,

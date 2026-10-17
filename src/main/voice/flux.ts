@@ -106,7 +106,8 @@ export class FluxClient implements SttPort {
       const info: TurnInfo = {
         event: event as TurnEventName,
         turnIndex: typeof msg.turn_index === 'number' ? msg.turn_index : 0,
-        transcript: typeof msg.transcript === 'string' ? msg.transcript : ''
+        transcript: typeof msg.transcript === 'string' ? msg.transcript : '',
+        ...(Array.isArray(msg.words) ? { words: parseWords(msg.words) } : {})
       }
       this.hooks.onTurn(info)
     }
@@ -173,4 +174,17 @@ export class FluxClient implements SttPort {
       setTimeout(() => ws.terminate(), 1000).unref()
     }
   }
+}
+
+/** Flux's per-word results (`TurnInfo.words`: `{ word, confidence, start, end }`). Anything malformed is skipped. */
+function parseWords(raw: unknown[]): Array<{ word: string; confidence: number }> {
+  const out: Array<{ word: string; confidence: number }> = []
+  for (const w of raw) {
+    if (!w || typeof w !== 'object') continue
+    const { word, confidence } = w as { word?: unknown; confidence?: unknown }
+    // The schema declares confidence a string ("float"); SDKs treat it as a number. Accept both.
+    const c = typeof confidence === 'number' ? confidence : typeof confidence === 'string' ? Number(confidence) : NaN
+    if (typeof word === 'string' && Number.isFinite(c)) out.push({ word, confidence: c })
+  }
+  return out
 }

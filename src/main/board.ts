@@ -105,7 +105,10 @@ export function registerBoardIpc(): void {
   ipcMain.on('board:save', (event, scene: unknown) => {
     if (event.sender !== host?.webContents) return
     const s = scene as Partial<SavedBoard> | null
-    if (s && Array.isArray(s.elements) && s.viewport && typeof s.viewport === 'object') saved = s as SavedBoard
+    if (!s || !Array.isArray(s.elements) || !s.viewport || typeof s.viewport !== 'object') return
+    // Picture data only comes along when the set of pictures changed; otherwise keep what we have.
+    const files = s.files && typeof s.files === 'object' ? s.files : saved?.files
+    saved = { elements: s.elements, viewport: s.viewport, ...(files ? { files } : {}) } as SavedBoard
   })
 
   ipcMain.handle('board:load', (event) => (event.sender === host?.webContents ? saved : null))

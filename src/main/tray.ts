@@ -8,6 +8,11 @@ export interface TrayActions {
   toggleCompanion(): void
   openLesson(): void
   openPreferences(): void
+  study: {
+    list(): Array<{ id: string; name: string; pages: number; unit: 'page' | 'part'; problem?: string }>
+    add(): void
+    remove(id: string): void
+  }
   toggleVoice(): void
   isVoiceActive(): boolean
   screen: {
@@ -28,6 +33,21 @@ function screenItems({ screen }: TrayActions): MenuItemConstructorOptions[] {
     { label: 'Stop Sharing', click: screen.stop },
     { label: 'Show What Echo Sees', click: screen.showLatest }
   ]
+}
+
+function studyItems({ study }: TrayActions): MenuItemConstructorOptions[] {
+  const files = study.list()
+  const items: MenuItemConstructorOptions[] = [{ label: 'Add Study Material…', click: study.add }]
+  if (files.length) {
+    items.push({
+      label: `Study Material (${files.length})`,
+      submenu: files.map((f) => ({
+        label: `${f.name} · ${f.problem ?? `${f.pages} ${f.unit}${f.pages === 1 ? '' : 's'}`}`,
+        submenu: [{ label: 'Remove', click: () => study.remove(f.id) }]
+      }))
+    })
+  }
+  return items
 }
 
 // Module-level reference: a Tray that gets garbage-collected disappears.
@@ -57,6 +77,8 @@ export function createTray(actions: TrayActions): void {
         { label: actions.isVoiceActive() ? 'End Conversation' : 'Start Conversation', click: actions.toggleVoice },
         { type: 'separator' },
         ...screenItems(actions),
+        { type: 'separator' },
+        ...studyItems(actions),
         { type: 'separator' },
         { label: 'Preferences…', click: actions.openPreferences },
         { label: 'Quit Echo', click: () => app.quit() }
