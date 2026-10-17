@@ -1,14 +1,20 @@
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, nativeTheme, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, screen, shell } from 'electron'
 import { attachBoardHost, registerBoardIpc } from './board'
+import { attachScreenHost, registerScreenIpc, screenContext } from './screenContext'
 import { createTray } from './tray'
+import windowIconPath from '../../resources/icon.png?asset'
 
 const COMPANION_WIDTH = 150
-const COMPANION_HEIGHT = 240
+// Tall enough for the "Watching" pill above the character.
+const COMPANION_HEIGHT = 270
 const SCREEN_MARGIN = 24
 
 let companion: BrowserWindow | null = null
 let lesson: BrowserWindow | null = null
+/** Screenshot the current lesson was started from (for the teacher handoff). */
+let lessonSourceFrameId: string | null = null
 
 function createCompanionWindow(): BrowserWindow {
   const { workArea } = screen.getPrimaryDisplay()
@@ -36,9 +42,12 @@ function createCompanionWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      // It owns the screen-capture stream; keep sampling while hidden.
+      backgroundThrottling: false
     }
   })
+  attachScreenHost(win)
 
   // 'floating' keeps it above normal windows; also follow the user across
   // macOS Spaces and over full-screen apps.
@@ -68,6 +77,11 @@ function openLessonWindow(): void {
     return
   }
 
+  // Preserve what the student was looking at before the lesson window covers
+  // it, so later questions refer to the material, not the whiteboard.
+  const source = screenContext.latest()
+  if (source && screenContext.pin(source.id)) lessonSourceFrameId = source.id
+
   const isMac = process.platform === 'darwin'
   const isWin = process.platform === 'win32'
   nativeTheme.themeSource = 'light'
@@ -78,8 +92,10 @@ function openLessonWindow(): void {
     minWidth: 760,
     minHeight: 520,
     show: false,
-    backgroundColor: '#f3f1ea',
+    backgroundColor: '#f5f4f0',
     title: 'Lesson',
+    // Windows/Linux taskbar + title icon (macOS windows don't show one).
+    icon: windowIconPath,
     // macOS: traffic lights inset into the renderer's title bar.
     ...(isMac && {
       titleBarStyle: 'hiddenInset' as const,
@@ -88,7 +104,7 @@ function openLessonWindow(): void {
     // Windows: native caption buttons drawn over the renderer's title bar.
     ...(isWin && {
       titleBarStyle: 'hidden' as const,
-      titleBarOverlay: { color: '#00000000', symbolColor: '#151514', height: 52 }
+      titleBarOverlay: { color: '#00000000', symbolColor: '#1c1c1e', height: 52 }
     }),
     ...(!isMac && !isWin && { frame: false }),
     webPreferences: {
@@ -120,7 +136,10 @@ ipcMain.on('companion:open-lesson', (event) => {
 // Button actions. Stubs for now — these become "start listening" and
 // "explain deeper / open lecture" once the voice and lecture layers exist.
 ipcMain.on('companion:ask', () => {
-  console.log('[companion] ? pressed')
+  screenContext.captureFresh().then(
+    (f) => console.log(`[companion] ? pressed — ${f.id} ${f.width}×${f.height} (${f.data.length} bytes) from ${f.sourceLabel}`),
+    (err: Error) => console.log(`[companion] ? pressed — no screen context: ${err.message}`)
+  )
 })
 ipcMain.on('companion:next', () => {
   console.log('[companion] > pressed')
@@ -160,6 +179,15 @@ ipcMain.on('companion:drag-start', (event) => {
 })
 ipcMain.on('companion:drag-end', stopDrag)
 
+// Debug aid: open the most recent frame in the system image viewer.
+async function showLatestFrame(): Promise<void> {
+  const frame = screenContext.latest()
+  if (!frame) return
+  const file = join(app.getPath('temp'), 'echo-latest-frame.jpg')
+  await writeFile(file, frame.data)
+  await shell.openPath(file)
+}
+
 function showCompanion(): void {
   if (!companion || companion.isDestroyed()) companion = createCompanionWindow()
   else companion.showInactive()
@@ -177,6 +205,7 @@ if (!app.requestSingleInstanceLock()) {
     app.dock?.hide()
 
     registerBoardIpc()
+    registerScreenIpc(() => [companion, lesson].filter((w): w is BrowserWindow => !!w && !w.isDestroyed()))
     companion = createCompanionWindow()
 
     createTray({
@@ -185,7 +214,14 @@ if (!app.requestSingleInstanceLock()) {
         if (companion && !companion.isDestroyed() && companion.isVisible()) companion.hide()
         else showCompanion()
       },
-      openLesson: openLessonWindow
+      openLesson: openLessonWindow,
+      screen: {
+        state: screenContext.state,
+        start: screenContext.requestStart,
+        togglePause: screenContext.togglePause,
+        stop: screenContext.stop,
+        showLatest: showLatestFrame
+      }
     })
 
     app.on('activate', showCompanion)

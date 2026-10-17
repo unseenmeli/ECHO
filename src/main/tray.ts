@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
-import { app, Menu, nativeImage, Tray } from 'electron'
+import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from 'electron'
+import type { SharingState } from '../shared/screen'
 import macIconPath from '../../resources/trayTemplate@2x.png?asset'
 import winIconPath from '../../resources/tray-win.png?asset'
 
@@ -7,6 +8,24 @@ export interface TrayActions {
   isCompanionVisible(): boolean
   toggleCompanion(): void
   openLesson(): void
+  screen: {
+    state(): SharingState
+    start(): void
+    togglePause(): void
+    stop(): void
+    showLatest(): void
+  }
+}
+
+function screenItems({ screen }: TrayActions): MenuItemConstructorOptions[] {
+  const { status, sourceLabel } = screen.state()
+  if (status === 'off') return [{ label: 'Share Screen…', click: screen.start }]
+  return [
+    { label: `${status === 'paused' ? 'Paused' : 'Watching'}${sourceLabel ? ` · ${sourceLabel}` : ''}`, enabled: false },
+    { label: status === 'paused' ? 'Resume Watching' : 'Pause Watching', click: screen.togglePause },
+    { label: 'Stop Sharing', click: screen.stop },
+    { label: 'Show What Echo Sees', click: screen.showLatest }
+  ]
 }
 
 // Module-level reference: a Tray that gets garbage-collected disappears.
@@ -33,6 +52,8 @@ export function createTray(actions: TrayActions): void {
       Menu.buildFromTemplate([
         { label: actions.isCompanionVisible() ? 'Hide Echo' : 'Show Echo', click: actions.toggleCompanion },
         { label: 'Open Lesson', click: actions.openLesson },
+        { type: 'separator' },
+        ...screenItems(actions),
         { type: 'separator' },
         { label: 'Quit Echo', click: () => app.quit() }
       ])

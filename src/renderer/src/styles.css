@@ -30,6 +30,7 @@ body,
 }
 
 .companion {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -190,8 +191,78 @@ body,
   transform: translateX(1px);
 }
 
+/* Screen-sharing indicator: always visible while sharing, click to pause. */
+.watch-pill {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  border-radius: 999px;
+  border: 0.5px solid var(--glass-border);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow), inset 0 1px 0 var(--glass-highlight);
+  color: var(--glyph);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+}
+
+.watch-pill:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.watch-dot {
+  position: relative;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ff2e9a;
+}
+
+/* Soft "live" ring, like a recording indicator. */
+.watch-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: inherit;
+  animation: live-ring 1.8s ease-out infinite;
+}
+
+@keyframes live-ring {
+  from {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+.watch-pill[data-status='paused'] .watch-dot {
+  background: #8e8e93;
+}
+
+.watch-pill[data-status='paused'] .watch-dot::after {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .character {
+    animation: none;
+  }
+  .watch-dot::after {
     animation: none;
   }
   .glass-button {

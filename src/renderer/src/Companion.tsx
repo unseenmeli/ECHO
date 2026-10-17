@@ -1,5 +1,6 @@
 import { useRef, type PointerEvent } from 'react'
 import { CharacterSprite } from './CharacterSprite'
+import { useScreenWatcher } from './useScreenWatcher'
 
 // Dragging is done by hand rather than with -webkit-app-region: drag, because
 // native drag regions swallow mouse events and :hover would never fire. The
@@ -30,9 +31,28 @@ function useWindowDrag() {
 
 export function Companion() {
   const drag = useWindowDrag()
+  const screen = useScreenWatcher()
+
+  // Questions are about the screen, so the first ? starts sharing.
+  const ask = (): void => {
+    if (screen.status === 'off') void screen.start()
+    else window.companion.ask()
+  }
 
   return (
     <main className="companion">
+      {screen.status !== 'off' && (
+        <button
+          className="watch-pill"
+          data-status={screen.status}
+          onClick={screen.togglePause}
+          title={`${screen.status === 'paused' ? 'Resume' : 'Pause'} watching${screen.sourceLabel ? ` · ${screen.sourceLabel}` : ''}`}
+        >
+          <span className="watch-dot" aria-hidden="true" />
+          {screen.status === 'paused' ? 'Paused' : 'Watching'}
+        </button>
+      )}
+
       <div className="character" title="Drag to move" {...drag}>
         <CharacterSprite />
       </div>
@@ -53,8 +73,8 @@ export function Companion() {
         <button
           className="glass-button"
           aria-label="Ask a question"
-          title="Ask a question"
-          onClick={() => window.companion.ask()}
+          title={screen.status === 'off' ? 'Share your screen to ask about it' : 'Ask a question'}
+          onClick={ask}
         >
           <span className="glyph-question">?</span>
         </button>
