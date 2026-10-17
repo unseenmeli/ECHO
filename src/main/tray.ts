@@ -1,15 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from 'electron'
 import type { SharingState } from '../shared/screen'
-import macIconPath from '../../resources/trayTemplate@2x.png?asset'
-import winIconPath from '../../resources/tray-win.png?asset'
-import { app, Menu, nativeImage, Tray } from 'electron'
 import iconPath from '../../resources/trayTemplate@2x.png?asset'
 
 export interface TrayActions {
   isCompanionVisible(): boolean
   toggleCompanion(): void
   openLesson(): void
+  toggleVoice(): void
+  isVoiceActive(): boolean
   screen: {
     state(): SharingState
     start(): void
@@ -28,8 +27,6 @@ function screenItems({ screen }: TrayActions): MenuItemConstructorOptions[] {
     { label: 'Stop Sharing', click: screen.stop },
     { label: 'Show What Echo Sees', click: screen.showLatest }
   ]
-  toggleVoice(): void
-  isVoiceActive(): boolean
 }
 
 // Module-level reference: a Tray that gets garbage-collected disappears.

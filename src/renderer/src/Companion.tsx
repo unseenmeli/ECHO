@@ -33,15 +33,19 @@ function useWindowDrag() {
 export function Companion() {
   const drag = useWindowDrag()
   const screen = useScreenWatcher()
+  const { snapshot } = useVoice()
+  const voiceOn = snapshot.state !== 'idle' && snapshot.state !== 'error'
+  const voiceLabel = voiceOn ? 'End conversation' : 'Start conversation'
 
-  // Questions are about the screen, so the first ? starts sharing.
-  const ask = (): void => {
-    if (screen.status === 'off') void screen.start()
-    else window.companion.ask()
+  // Questions are about the screen, so starting a conversation also offers to
+  // share it first. Cancelling the picker still starts the conversation.
+  const toggleVoice = async (): Promise<void> => {
+    if (!voiceOn && screen.status === 'off') await screen.start()
+    window.voice.command({ type: 'toggle' })
   }
 
   return (
-    <main className="companion">
+    <main className="companion" data-voice={snapshot.state}>
       {screen.status !== 'off' && (
         <button
           className="watch-pill"
@@ -54,12 +58,6 @@ export function Companion() {
         </button>
       )}
 
-  const { snapshot } = useVoice()
-  const voiceOn = snapshot.state !== 'idle' && snapshot.state !== 'error'
-  const voiceLabel = voiceOn ? 'End conversation' : 'Start conversation'
-
-  return (
-    <main className="companion" data-voice={snapshot.state}>
       <div className="character" title="Drag to move" {...drag}>
         <CharacterSprite />
       </div>
@@ -79,13 +77,10 @@ export function Companion() {
         <span className="controls-divider" aria-hidden="true" />
         <button
           className="glass-button"
-          aria-label="Ask a question"
-          title={screen.status === 'off' ? 'Share your screen to ask about it' : 'Ask a question'}
-          onClick={ask}
           aria-label={voiceLabel}
           aria-pressed={voiceOn}
           title={snapshot.state === 'error' && snapshot.message ? snapshot.message : voiceLabel}
-          onClick={() => window.voice.command({ type: 'toggle' })}
+          onClick={() => void toggleVoice()}
         >
           <span className="glyph-question">?</span>
           {snapshot.state !== 'idle' && <span className="voice-dot" aria-hidden="true" />}

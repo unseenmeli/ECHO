@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { FramePayload, SharingState } from '../shared/screen'
+import type { VoiceEvent } from '../shared/voice'
+import type { VoiceApi } from './voiceBridge'
 
 // Subscribe to a main-process channel; returns an unsubscribe function.
 function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
@@ -7,9 +9,6 @@ function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () 
   ipcRenderer.on(channel, listener)
   return () => ipcRenderer.removeListener(channel, listener)
 }
-import { contextBridge, ipcRenderer } from 'electron'
-import type { VoiceEvent } from '../shared/voice'
-import type { VoiceApi } from './voiceBridge'
 
 // The only surface the React UI gets. Keep privileged Electron APIs out of
 // the renderer; add narrowly scoped methods here as features land.

@@ -134,14 +134,6 @@ ipcMain.on('companion:open-lesson', (event) => {
   if (companion && event.sender === companion.webContents) openLessonWindow()
 })
 
-// Button actions. Stubs for now — these become "start listening" and
-// "explain deeper / open lecture" once the voice and lecture layers exist.
-ipcMain.on('companion:ask', () => {
-  screenContext.captureFresh().then(
-    (f) => console.log(`[companion] ? pressed — ${f.id} ${f.width}×${f.height} (${f.data.length} bytes) from ${f.sourceLabel}`),
-    (err: Error) => console.log(`[companion] ? pressed — no screen context: ${err.message}`)
-  )
-})
 // Button actions. "?" starts/ends the voice conversation (see ./voice); ">"
 // is still a stub until the lecture layer exists.
 ipcMain.on('companion:next', () => {
@@ -225,7 +217,7 @@ if (!app.requestSingleInstanceLock()) {
         togglePause: screenContext.togglePause,
         stop: screenContext.stop,
         showLatest: showLatestFrame
-      }
+      },
       toggleVoice: () => voiceHost.toggle(),
       isVoiceActive: () => voiceHost.isActive()
     })
