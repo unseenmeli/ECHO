@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readVoiceConfig } from '../src/main/voice/config'
-import { ChatError, type ChatPort, type ChatRequest, type EnginePort, type SttHooks, type SttPort, type TtsHooks, type TtsPort, type TurnInfo } from '../src/main/voice/ports'
+import { ChatError, type ChatPort, type ChatRequest, type EnginePort, type SttHooks, type SttPort, type TtsHooks, type TtsPort, type TurnInfo, type VoiceContextProvider } from '../src/main/voice/ports'
+import { SCREEN_FILLERS } from '../src/main/voice/intent'
 import { VoiceSession } from '../src/main/voice/session'
 import type { VoiceEvent } from '../src/shared/voice'
 
@@ -136,7 +137,7 @@ const flushMicrotasks = async (): Promise<void> => {
   for (let i = 0; i < 20; i++) await Promise.resolve()
 }
 
-function setup() {
+function setup(contextProvider?: VoiceContextProvider) {
   const cfg = readVoiceConfig({ ANTHROPIC_API_KEY: 'test-a', DEEPGRAM_API_KEY: 'test-d' })
   if (!cfg.ok) throw new Error('config')
   const engine = new FakeEngine()
@@ -159,6 +160,7 @@ function setup() {
       return t
     },
     emit: (e) => events.push(e),
+    contextProvider,
     log: () => {}
   })
   const ready = (): void => {
@@ -603,5 +605,83 @@ describe('local barge-in', () => {
     b.session.setMuted(true)
     b.session.onBargeIn()
     expect(b.engine.cleared).toEqual([])
+  })
+})
+
+describe('screen context', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  const SHOT = { mediaType: 'image/jpeg' as const, data: 'AAAA' }
+  const watching = (on = true): VoiceContextProvider => ({
+    isWatchingScreen: () => on,
+    getContext: async () => (on ? { screen: 'A screenshot is attached.', screenImage: SHOT } : { screen: 'Not sharing.' })
+  })
+  const ask = async (b: ReturnType<typeof setup>, text: string, index = 0): Promise<void> => {
+    b.stts.at(-1)!.turn('StartOfTurn', text, index)
+    b.stts.at(-1)!.turn('EndOfTurn', text, index)
+    await flushMicrotasks()
+  }
+
+  it('says a filler line right away, then answers with the screenshot attached', async () => {
+    const b = setup(watching())
+    b.ready()
+    b.chat.next(reply('It is a login form. ', 'The password field is empty.'))
+    b.stts.at(-1)!.turn('StartOfTurn', 'Hey do you see this', 0)
+    b.stts.at(-1)!.turn('EndOfTurn', 'Hey, do you see this thing on my screen?', 0)
+
+    // Spoken and flushed before Claude (or the screenshot) has come back.
+    const tts = b.ttss.at(-1)!
+    const filler = tts.spoken[0]?.trim()
+    expect(SCREEN_FILLERS).toContain(filler)
+    expect(tts.flushes).toBe(1)
+
+    await flushMicrotasks()
+    expect(b.chat.calls[0].image).toEqual(SHOT)
+    expect(b.chat.calls[0].system).toContain('<already_said>')
+    expect(tts.spoken.slice(1).join('')).toContain('It is a login form.')
+
+    // The filler is heard but is not part of the conversation history.
+    for (let seg = 0; seg < tts.flushes; seg++) tts.flushed('r1', seg)
+    b.session.onPlayback({ kind: 'started', responseId: 'r1', at: 1 })
+    b.session.onPlayback({ kind: 'ended', responseId: 'r1', at: 2 })
+    b.chat.next(reply('Sure.'))
+    await ask(b, 'Thanks', 1)
+    expect(b.chat.calls[1].messages[1]).toEqual({ role: 'assistant', content: 'It is a login form. The password field is empty.' })
+  })
+
+  it('attaches the screenshot to every turn, without a filler for other questions', async () => {
+    const b = setup(watching())
+    b.ready()
+    b.chat.next(reply('A variable holds a value.'))
+    await ask(b, 'What is a variable?')
+    expect(b.ttss.at(-1)!.spoken.join('')).toBe('A variable holds a value. ')
+    expect(b.chat.calls[0].image).toEqual(SHOT)
+    expect(b.chat.calls[0].system).not.toContain('<already_said>')
+  })
+
+  it('no filler or screenshot when the screen is not shared', async () => {
+    const b = setup(watching(false))
+    b.ready()
+    b.chat.next(reply("I can't see your screen yet."))
+    await ask(b, 'Can you see my screen?')
+    expect(b.ttss.at(-1)!.spoken.join('')).toBe("I can't see your screen yet. ")
+    expect(b.chat.calls[0].image).toBeUndefined()
+    expect(b.chat.calls[0].system).toContain('Not sharing.')
+  })
+
+  it('an interruption during the filler keeps the question open', async () => {
+    const b = setup(watching())
+    b.ready()
+    b.chat.next(never())
+    b.chat.next(reply('That is a for loop.'))
+    await ask(b, 'Can you look at')
+    b.ttss.at(-1)!.audio('r1')
+    b.session.onPlayback({ kind: 'started', responseId: 'r1', at: 1 })
+
+    // The user keeps talking over the filler.
+    await ask(b, 'this code here?', 1)
+    vi.advanceTimersByTime(500)
+    expect(b.chat.calls[1].messages).toEqual([{ role: 'user', content: 'Can you look at this code here?' }])
   })
 })

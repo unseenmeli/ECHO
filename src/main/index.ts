@@ -201,7 +201,7 @@ if (!app.requestSingleInstanceLock()) {
 
     registerBoardIpc()
     registerScreenIpc(() => [companion, lesson].filter((w): w is BrowserWindow => !!w && !w.isDestroyed()))
-    voiceHost.register()
+    voiceHost.register({ canCaptureScreen: (wc) => !!companion && !companion.isDestroyed() && wc === companion.webContents })
     companion = createCompanionWindow()
 
     createTray({
