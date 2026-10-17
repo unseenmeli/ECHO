@@ -1,5 +1,6 @@
 import WebSocket from 'ws'
 import type { VoiceConfig } from './config'
+import { DeepgramAuthError, keyAuth, type DeepgramAuth } from './backend'
 import type { LinkStatus, SttHooks, SttPort, TurnEventName, TurnInfo } from './ports'
 import { MIC_SAMPLE_RATE } from '../../shared/voice'
 
@@ -20,10 +21,14 @@ export class FluxClient implements SttPort {
   private attempt = 0
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private open = false
+  /** Bumped per connection attempt, so a credential that arrives after a newer attempt (or close) is dropped. */
+  private attemptId = 0
 
+  /** @param auth Credentials for each socket: the .env key, or a short-lived token from ECHO's server. */
   constructor(
     private readonly cfg: VoiceConfig,
-    private readonly hooks: SttHooks
+    private readonly hooks: SttHooks,
+    private readonly auth: DeepgramAuth = keyAuth(cfg.deepgramApiKey)
   ) {}
 
   connect(): void {
@@ -45,7 +50,22 @@ export class FluxClient implements SttPort {
   }
 
   private openSocket(): void {
-    const ws = new WebSocket(this.url(), { headers: { Authorization: `Token ${this.cfg.deepgramApiKey}` } })
+    const id = ++this.attemptId
+    this.auth.header().then(
+      (authorization) => {
+        if (id === this.attemptId && this.wanted) this.openWith(authorization)
+      },
+      (err: unknown) => {
+        if (id !== this.attemptId || !this.wanted) return
+        const message = err instanceof Error ? err.message : 'Could not get speech credentials'
+        if (err instanceof DeepgramAuthError && err.fatal) this.fatal(message)
+        else this.retry(message.replace(/\.$/, ''))
+      }
+    )
+  }
+
+  private openWith(authorization: string): void {
+    const ws = new WebSocket(this.url(), { headers: { Authorization: authorization } })
     this.ws = ws
     this.open = false
 
@@ -68,7 +88,7 @@ export class FluxClient implements SttPort {
       if (this.ws !== ws) return
       this.ws = null
       if (status === 401 || status === 403) {
-        this.fatal('Deepgram rejected the API key (check DEEPGRAM_API_KEY).')
+        this.fatal(this.auth.rejectedMessage)
       } else if (status === 429) {
         this.fatal('Deepgram rate limit reached. Wait a moment and try again.')
       } else {
@@ -145,6 +165,7 @@ export class FluxClient implements SttPort {
 
   close(): void {
     this.wanted = false
+    this.attemptId += 1
     const ws = this.ws
     if (ws && this.open && ws.readyState === WebSocket.OPEN) {
       try {

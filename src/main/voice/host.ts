@@ -5,6 +5,8 @@ import { CommonsPictures } from '../lesson/pictures'
 import { ClaudeChat } from './claude'
 import { loadEnvFiles, readVoiceConfig } from './config'
 import { DeepgramTts } from './tts'
+import { deepgramAuthFor } from './backend'
+import { backendUrl, type AccessCodeStore } from '../accessCode'
 import { FluxClient } from './flux'
 import { screenVoiceContext } from './screenProvider'
 import type { EnginePort } from './ports'
@@ -42,6 +44,7 @@ class VoiceHost {
   private closeLesson: () => void = () => {}
   private preferences: PreferenceStore | null = null
   private study: StudyMaterialPort | null = null
+  private access: AccessCodeStore | null = null
   /** Kept across conversations, so a picture found once is not downloaded again. */
   private pictures: CommonsPictures | null = null
 
@@ -70,8 +73,11 @@ class VoiceHost {
       closeLesson?(): void
       preferences?: PreferenceStore
       study?: StudyMaterialPort
+      /** The saved judge access code, used when the app runs against ECHO's server. */
+      access?: AccessCodeStore
     } = {}
   ): void {
+    if (options.access) this.access = options.access
     if (options.study) this.study = options.study
     if (options.canCaptureScreen) this.canCaptureScreen = options.canCaptureScreen
     if (options.openLesson) this.openLesson = options.openLesson
@@ -196,7 +202,12 @@ class VoiceHost {
       loadEnvFiles([app.getAppPath(), process.cwd(), app.getPath('userData')])
       this.envLoaded = true
     }
-    const result = readVoiceConfig()
+    // A server address (env, or baked in at build time) switches the app to ECHO's server and its access code.
+    const result = readVoiceConfig({
+      ...process.env,
+      ECHO_BACKEND_URL: backendUrl(),
+      ECHO_ACCESS_CODE: this.access?.get() ?? process.env.ECHO_ACCESS_CODE
+    })
     if (!result.ok) {
       this.configError = { ...IDLE_SNAPSHOT, state: 'error', message: result.message }
       this.broadcast({ type: 'state', snapshot: this.configError })
@@ -222,13 +233,15 @@ class VoiceHost {
     // A new session object per configuration keeps model/voice env changes honest.
     const cfg = result.config
     const chat = new ClaudeChat(cfg)
+    const deepgramAuth = deepgramAuthFor(cfg)
+    if (cfg.backend) console.log(`[voice] using ECHO server ${new URL(cfg.backend.url).host}`)
     const prev = this.session?.getSnapshot()
     this.session = new VoiceSession({
       config: cfg,
       engine: this.enginePort,
-      createStt: (hooks) => new FluxClient(cfg, hooks),
+      createStt: (hooks) => new FluxClient(cfg, hooks, deepgramAuth),
       // The saved voice wins over the env default, and is read each time a speech socket is opened.
-      createTts: (hooks) => new DeepgramTts({ ...cfg, ttsVoice: this.preferences?.get('voice') ?? cfg.ttsVoice }, hooks),
+      createTts: (hooks) => new DeepgramTts({ ...cfg, ttsVoice: this.preferences?.get('voice') ?? cfg.ttsVoice }, hooks, deepgramAuth),
       chat,
       lesson: {
         available: () => cfg.visualsEnabled && isBoardOpen(),
