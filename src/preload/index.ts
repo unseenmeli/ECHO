@@ -7,7 +7,7 @@ const api = {
   next: (): void => ipcRenderer.send('companion:next'),
   openLesson: (): void => ipcRenderer.send('companion:open-lesson'),
   dragStart: (): void => ipcRenderer.send('companion:drag-start'),
-  dragMove: (dx: number, dy: number): void => ipcRenderer.send('companion:drag-move', dx, dy)
+  dragEnd: (): void => ipcRenderer.send('companion:drag-end')
 }
 
 contextBridge.exposeInMainWorld('companion', api)

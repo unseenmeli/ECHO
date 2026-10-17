@@ -2,25 +2,29 @@ import { useRef, type PointerEvent } from 'react'
 import { CharacterSprite } from './CharacterSprite'
 
 // Dragging is done by hand rather than with -webkit-app-region: drag, because
-// native drag regions swallow mouse events and :hover would never fire.
+// native drag regions swallow mouse events and :hover would never fire. The
+// renderer only marks the start and end; the main process moves the window
+// by following the OS cursor.
 function useWindowDrag() {
-  const start = useRef<{ x: number; y: number } | null>(null)
+  const dragging = useRef(false)
+
+  const end = (): void => {
+    if (!dragging.current) return
+    dragging.current = false
+    window.companion.dragEnd()
+  }
 
   return {
     onPointerDown(e: PointerEvent<HTMLElement>) {
       if (e.button !== 0) return
+      // Capture keeps pointerup coming to us even if the cursor outruns the window.
       e.currentTarget.setPointerCapture(e.pointerId)
-      start.current = { x: e.screenX, y: e.screenY }
+      dragging.current = true
       window.companion.dragStart()
     },
-    onPointerMove(e: PointerEvent<HTMLElement>) {
-      if (!start.current) return
-      window.companion.dragMove(e.screenX - start.current.x, e.screenY - start.current.y)
-    },
-    onPointerUp(e: PointerEvent<HTMLElement>) {
-      e.currentTarget.releasePointerCapture(e.pointerId)
-      start.current = null
-    }
+    onPointerUp: end,
+    onPointerCancel: end,
+    onLostPointerCapture: end
   }
 }
 
@@ -29,7 +33,7 @@ export function Companion() {
 
   return (
     <main className="companion">
-      <div className="character" title="Drag to move" {...drag} onPointerCancel={drag.onPointerUp}>
+      <div className="character" title="Drag to move" {...drag}>
         <CharacterSprite />
       </div>
 

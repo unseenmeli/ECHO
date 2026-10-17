@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, nativeTheme, screen } from 'electron'
 import { attachBoardHost, registerBoardIpc } from './board'
+import { createTray } from './tray'
 
 const COMPANION_WIDTH = 150
 const COMPANION_HEIGHT = 240
@@ -125,27 +126,71 @@ ipcMain.on('companion:next', () => {
   console.log('[companion] > pressed')
 })
 
-// Window dragging. The renderer sends the cursor offset since drag start;
-// applying it to the origin (rather than summing deltas) avoids drift.
-let dragOrigin: [number, number] | null = null
+// Window dragging. While the pointer is held, the window follows the OS cursor
+// position instead of renderer coordinates: on Windows those lag behind a
+// moving window and feed back into jumps. setBounds pins the size because
+// setPosition can grow transparent windows on scaled Windows displays.
+const DRAG_INTERVAL_MS = 8
+let dragTimer: ReturnType<typeof setInterval> | null = null
 
-ipcMain.on('companion:drag-start', () => {
-  if (companion) dragOrigin = companion.getPosition() as [number, number]
+function stopDrag(): void {
+  if (dragTimer) clearInterval(dragTimer)
+  dragTimer = null
+}
+
+ipcMain.on('companion:drag-start', (event) => {
+  const win = companion
+  if (!win || event.sender !== win.webContents) return
+  stopDrag()
+
+  const cursor = screen.getCursorScreenPoint()
+  const [startX, startY] = win.getPosition()
+  const grab = { x: cursor.x - startX, y: cursor.y - startY }
+  let last = { x: startX, y: startY }
+
+  dragTimer = setInterval(() => {
+    if (win.isDestroyed()) return stopDrag()
+    const p = screen.getCursorScreenPoint()
+    const x = p.x - grab.x
+    const y = p.y - grab.y
+    if (x === last.x && y === last.y) return
+    last = { x, y }
+    win.setBounds({ x, y, width: COMPANION_WIDTH, height: COMPANION_HEIGHT })
+  }, DRAG_INTERVAL_MS)
 })
-ipcMain.on('companion:drag-move', (_event, dx: unknown, dy: unknown) => {
-  if (!companion || !dragOrigin || typeof dx !== 'number' || typeof dy !== 'number') return
-  if (!Number.isFinite(dx) || !Number.isFinite(dy)) return
-  companion.setPosition(Math.round(dragOrigin[0] + dx), Math.round(dragOrigin[1] + dy))
-})
+ipcMain.on('companion:drag-end', stopDrag)
 
-app.whenReady().then(() => {
-  registerBoardIpc()
-  companion = createCompanionWindow()
+function showCompanion(): void {
+  if (!companion || companion.isDestroyed()) companion = createCompanionWindow()
+  else companion.showInactive()
+}
 
-  app.on('activate', () => {
-    if (!companion) companion = createCompanionWindow()
+// Double-launching (e.g. the Windows shortcut) reuses the running companion.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', showCompanion)
+
+  app.whenReady().then(() => {
+    // Lives in the menu bar / notification area, not the Dock (packaged macOS
+    // builds also set LSUIElement so the Dock icon never flashes at launch).
+    app.dock?.hide()
+
+    registerBoardIpc()
+    companion = createCompanionWindow()
+
+    createTray({
+      isCompanionVisible: () => !!companion && !companion.isDestroyed() && companion.isVisible(),
+      toggleCompanion: () => {
+        if (companion && !companion.isDestroyed() && companion.isVisible()) companion.hide()
+        else showCompanion()
+      },
+      openLesson: openLessonWindow
+    })
+
+    app.on('activate', showCompanion)
   })
-})
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

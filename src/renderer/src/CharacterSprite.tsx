@@ -8,7 +8,7 @@ import frame3 from './assets/poses/frame-3.png'
 // frames crossfade in CSS (.sprite img transition).
 const FRAMES = [frame1, frame2, frame3]
 const SEQUENCE = [0, 1, 2, 1]
-const IDLE_HOLD_MS = 2400
+const IDLE_HOLD_MS = 6000
 const FRAME_MS = 280
 
 function useFrameIndex(): number {
