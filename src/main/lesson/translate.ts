@@ -1,7 +1,6 @@
 import type { BoardBatch, BoardElement, ElementSkeleton } from '../../shared/board'
 import {
   FONT,
-  rectContains,
   routeEdge,
   type Route,
   findFreeRect,
@@ -25,21 +24,29 @@ import { USER_REF, World, eid, type EchoMeta } from './world'
 // and styled consistently. It never executes anything model-generated: ops
 // are data, validated first, and everything drawn is produced here.
 
+// House style, matching ECHO's character and app: ink outlines, pastel "sticker" fills with a hard offset
+// shadow in a deeper shade, chunky display titles over a pink highlighter swipe, and hot pink for focus.
 const INK = '#1c1c1e'
 const MUTED = '#6b6963'
 const ACCENT = '#ff2e9a'
-const GRID = '#d9d7d0'
+const ACCENT_DEEP = '#c41f74'
+const GRID = '#e4e1da'
+const HIGHLIGHTER = '#ffd1e8'
 export const PALETTE = {
-  neutral: { stroke: '#3a3a3c', fill: '#ffffff' },
-  blue: { stroke: '#1c6dd0', fill: '#dbeafe' },
-  green: { stroke: '#2b8a3e', fill: '#d3f9d8' },
-  orange: { stroke: '#d9480f', fill: '#ffe8cc' },
-  red: { stroke: '#c92a2a', fill: '#ffe3e3' },
-  purple: { stroke: '#7048e8', fill: '#e5dbff' }
+  neutral: { stroke: INK, fill: '#ffffff', shade: '#dcd8cf' },
+  pink: { stroke: INK, fill: '#ffe0ef', shade: '#ff8cc6' },
+  blue: { stroke: INK, fill: '#dff0ff', shade: '#8cc4f5' },
+  green: { stroke: INK, fill: '#dcf7e6', shade: '#7fd7a2' },
+  orange: { stroke: INK, fill: '#ffeacc', shade: '#ffbd6b' },
+  red: { stroke: INK, fill: '#ffe1e1', shade: '#ff9393' },
+  purple: { stroke: INK, fill: '#ece3ff', shade: '#b89cff' }
 } as const
 type ColorName = keyof typeof PALETTE
 const DIM_OPACITY = 35
 const FONT_FAMILY = 6 // Nunito: clean and legible at diagram sizes
+const DISPLAY_FAMILY = 7 // Lilita One: chunky and friendly, for titles
+/** Offset of the hard shadow behind stickers (nodes, notes, tables, bars). */
+const SHADOW = { x: 6, y: 6 }
 
 export interface TranslateContext {
   segmentId: string
@@ -68,6 +75,12 @@ export function fmt(n: number): string {
 class Draft {
   readonly batch: BoardBatch = { upsert: [], patch: [], remove: [], bindings: [] }
   focusIds: string[] = []
+  /** How the camera should treat focusIds: frame newly drawn content, or just glide to what is being discussed. */
+  focusMode: 'frame' | 'pan' = 'frame'
+  /** Something was drawn in this batch: that wins the camera over a highlight. */
+  focusDrawn = false
+  /** Elements to keep in view around the focus while panning (the highlighted thing's diagram). */
+  focusContext: string[] = []
   /** The focused content is bigger than the free area, so the camera should zoom out to fit it. */
   focusFit = false
   readonly warnings: string[] = []
@@ -110,11 +123,14 @@ class Draft {
 
 // --- Shared drawing helpers ---------------------------------------------------------
 
-function textSk(d: Draft, id: string, x: number, y: number, text: string, fontSize: number, color: string, meta: EchoMeta, align: 'left' | 'center' | 'right' = 'left'): void {
+function textSk(d: Draft, id: string, x: number, y: number, text: string, fontSize: number, color: string, meta: EchoMeta, align: 'left' | 'center' | 'right' = 'left', fontFamily = FONT_FAMILY): void {
   const lines = text.split('\n')
   const m = measure(lines, fontSize)
+  // Excalidraw anchors aligned text at x (the centre for "center", the right edge for "right") and measures
+  // the real width itself, so pass the anchor of the laid-out box rather than its left edge.
+  const anchorX = align === 'center' ? x + m.w / 2 : align === 'right' ? x + m.w : x
   d.put(
-    sk({ type: 'text', id, x, y, text, fontSize, fontFamily: FONT_FAMILY, strokeColor: color, textAlign: align, roughness: 0, customData: { echo: meta } }),
+    sk({ type: 'text', id, x: anchorX, y, text, fontSize, fontFamily, strokeColor: color, textAlign: align, roughness: 0, customData: { echo: meta } }),
     { x, y, w: m.w, h: m.h },
     meta,
     text
@@ -127,9 +143,14 @@ function adjust(n: SizedNode, shape: NodeSpecT['shape']): SizedNode {
   return n
 }
 
+const shapeType = (shape: NodeSpecT['shape']): string => (shape === 'diamond' ? 'diamond' : shape === 'round' ? 'ellipse' : 'rectangle')
+/** Sticker and shadow share a group so they move together when the learner drags them. */
+const stickerGroup = (logical: string): string[] => [`echo-g:${logical}`]
+const shadowId = (logical: string): string => eid(`${logical}__shadow`)
+
 function nodeSkeleton(id: string, rect: Rect, text: string, shape: NodeSpecT['shape'], colorName: string | undefined, meta: EchoMeta, opacity = 100): ElementSkeleton {
   const c = colorOf(colorName)
-  const type = shape === 'diamond' ? 'diamond' : shape === 'round' ? 'ellipse' : 'rectangle'
+  const type = shapeType(shape)
   return sk({
     type,
     id,
@@ -144,9 +165,59 @@ function nodeSkeleton(id: string, rect: Rect, text: string, shape: NodeSpecT['sh
     roughness: 0,
     opacity,
     roundness: type === 'rectangle' ? { type: 3 } : null,
+    groupIds: stickerGroup(meta.id),
     label: { text, fontSize: FONT.node, fontFamily: FONT_FAMILY, strokeColor: INK, textAlign: 'center', verticalAlign: 'middle' },
     customData: { echo: meta }
   })
+}
+
+/** The hard offset shadow behind a sticker. Added before the sticker so it sits underneath. */
+function putShadow(d: Draft, of: string, type: string, rect: Rect, shade: string, block: string | undefined, opacity = 100, angle = 0): void {
+  const r = { x: rect.x + SHADOW.x, y: rect.y + SHADOW.y, w: rect.w, h: rect.h }
+  const meta = d.meta({ id: `${of}__shadow`, kind: 'shadow', block, of })
+  d.put(
+    sk({
+      type,
+      id: shadowId(of),
+      x: r.x,
+      y: r.y,
+      width: r.w,
+      height: r.h,
+      angle,
+      strokeColor: shade,
+      backgroundColor: shade,
+      fillStyle: 'solid',
+      strokeWidth: 2,
+      roughness: 0,
+      opacity,
+      roundness: type === 'rectangle' ? { type: 3 } : null,
+      groupIds: stickerGroup(of),
+      customData: { echo: meta }
+    }),
+    r,
+    meta
+  )
+}
+
+/** A diagram node: its shadow, then the labelled shape. */
+function putNode(d: Draft, rect: Rect, text: string, shape: NodeSpecT['shape'], colorName: string | undefined, meta: EchoMeta, opacity = 100): void {
+  putShadow(d, meta.id, shapeType(shape), rect, colorOf(colorName).shade, meta.block, opacity)
+  d.put(nodeSkeleton(eid(meta.id), rect, text, shape, colorName, meta, opacity), rect, meta, text)
+}
+
+/** Block title in the display face, over a pink highlighter swipe. */
+function putTitle(d: Draft, id: string, block: string, x: number, y: number, title: string): void {
+  // Lilita One is condensed: about 0.48 of the font size per glyph, against the generic 0.6 estimate.
+  const m = measure([title], FONT.title)
+  const textW = Math.ceil(m.w * 0.8)
+  const swipe = { x: x - 6, y: y + m.h * 0.55, w: textW + 12, h: m.h * 0.4 }
+  const sm = d.meta({ id: `${block}__swipe`, kind: 'part', block })
+  d.put(
+    sk({ type: 'rectangle', id: eid(`${block}__swipe`), x: swipe.x, y: swipe.y, width: swipe.w, height: swipe.h, strokeColor: 'transparent', backgroundColor: HIGHLIGHTER, fillStyle: 'solid', strokeWidth: 1, roughness: 0, roundness: { type: 3 }, customData: { echo: sm } }),
+    swipe,
+    sm
+  )
+  textSk(d, id, x, y, title, FONT.title, INK, d.meta({ id: block, kind: 'title', block }), 'left', DISPLAY_FAMILY)
 }
 
 /**
@@ -158,7 +229,7 @@ export function layoutEdgeLabel(route: Route, label: string, obstacles: Rect[]):
   const { at, dir } = route.label
   const n = { x: -dir.y, y: dir.x }
   // Distance from the line's centre to the box centre so the box's near edge clears the line by a margin.
-  const base = Math.abs(n.x) * (m.w / 2) + Math.abs(n.y) * (m.h / 2) + 9
+  const base = Math.abs(n.x) * (m.w / 2) + Math.abs(n.y) * (m.h / 2) + 13
   const upperFirst = (a: Rect, b: Rect): number => (Math.abs(n.y) >= Math.abs(n.x) ? a.y - b.y : b.x - a.x)
   let fallback: Rect | null = null
   // Prefer hugging the line; if both sides are blocked (a short diagonal arrow), back off a little at a time.
@@ -194,7 +265,7 @@ function arrowSkeleton(d: Draft, e: EdgeSpecT, from: Rect, to: Rect, block: stri
   }
   // Other elements the arrow must not run through (everything except its own two ends).
   const obstacles = [...d.world.elements.values()]
-    .filter((w) => w.id !== eid(e.from) && w.id !== eid(e.to) && !(w.type === 'text' && w.containerId) && !(w.echo && (w.echo.kind === 'edge' || w.echo.kind === 'ring' || w.echo.kind === 'group' || (w.echo.kind === 'part' && w.echo.from))) && w.rect.w > 0 && w.rect.h > 0)
+    .filter((w) => w.id !== eid(e.from) && w.id !== eid(e.to) && !(w.type === 'text' && w.containerId) && !(w.echo && (w.echo.kind === 'edge' || w.echo.kind === 'ring' || w.echo.kind === 'group' || w.echo.kind === 'shadow' || (w.echo.kind === 'part' && w.echo.from))) && w.rect.w > 0 && w.rect.h > 0)
     .map((w) => w.rect)
   const route = preRoute ?? routeEdge(from, to, obstacles, lane)
   const sx = route.points[0].x
@@ -210,13 +281,13 @@ function arrowSkeleton(d: Draft, e: EdgeSpecT, from: Rect, to: Rect, block: stri
       x: sx,
       y: sy,
       points: route.points.map((p) => [p.x - sx, p.y - sy]),
-      strokeColor: '#4a4a4f',
+      strokeColor: INK,
       strokeWidth: 2,
       strokeStyle: e.style === 'dashed' ? 'dashed' : 'solid',
       roughness: 0,
       roundness: null,
-      startArrowhead: e.both ? 'arrow' : null,
-      endArrowhead: 'arrow',
+      startArrowhead: e.both ? 'triangle' : null,
+      endArrowhead: 'triangle',
       customData: { echo: meta }
     }),
     { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) },
@@ -228,7 +299,7 @@ function arrowSkeleton(d: Draft, e: EdgeSpecT, from: Rect, to: Rect, block: stri
   if (e.label) {
     const box = layoutEdgeLabel(route, e.label, obstacles)
     const lm: EchoMeta = d.meta({ id: `${e.from}->${e.to}#label`, kind: 'part', block, from: e.from, to: e.to })
-    textSk(d, labelId, box.x, box.y, wrapText(e.label, 16).join('\n'), FONT.edge, INK, lm, 'center')
+    textSk(d, labelId, box.x, box.y, wrapText(e.label, 16).join('\n'), FONT.edge, MUTED, lm, 'center')
   } else if (d.world.elements.has(labelId)) {
     d.remove(labelId)
   }
@@ -249,14 +320,35 @@ function rerouteEdges(d: Draft, logical: string): void {
 }
 
 /**
- * Camera policy: new content is placed inside the visible area whenever it fits, so the view stays put
- * (and the learner's own drawings stay where they are). Only content that landed outside the view moves the camera.
+ * Camera policy: the lesson is a guided tour. Whatever was just drawn is centred and framed; whatever the
+ * narration is about (a highlight) is glided to. New content is still placed in free space, so nothing the
+ * learner drew is ever covered.
  */
-function focusIfOffscreen(d: Draft, ids: string[]): void {
+function focusOn(d: Draft, ids: string[]): void {
   const box = d.world.bounds(ids)
   const usable = d.usable
-  d.focusIds = box && rectContains(usable, box) ? [] : ids
+  d.focusIds = ids
+  d.focusMode = 'frame'
+  d.focusDrawn = true
   d.focusFit = !!box && (box.w > usable.w || box.h > usable.h)
+}
+
+/**
+ * An addition to something already on the board (a node, note or group): bring it into view together with
+ * what it belongs to, without zooming in on the small new piece.
+ */
+function reveal(d: Draft, ids: string[], context: string[]): void {
+  d.focusIds = [...new Set([...ids, ...context])]
+  d.focusMode = 'pan'
+  d.focusDrawn = true
+}
+
+/** Glide to what is being talked about, unless something new was drawn in this batch (that is shown instead). */
+function panTo(d: Draft, ids: string[], context: string[] = []): void {
+  if (d.focusDrawn) return
+  d.focusIds = ids
+  d.focusMode = 'pan'
+  d.focusContext = context
 }
 
 function blockIds(d: Draft, block: string): string[] {
@@ -299,7 +391,7 @@ function diagramOp(d: Draft, op: Extract<VisualOp, { op: 'diagram' }>): void {
   const ids: string[] = []
 
   if (op.title) {
-    textSk(d, eid(`${op.id}:title`), dx, dy, op.title, FONT.title, INK, d.meta({ id: op.id, kind: 'title', block: op.id }))
+    putTitle(d, eid(`${op.id}:title`), op.id, dx, dy, op.title)
     ids.push(eid(`${op.id}:title`))
   }
   const rects = new Map<string, Rect>()
@@ -308,7 +400,7 @@ function diagramOp(d: Draft, op: Extract<VisualOp, { op: 'diagram' }>): void {
     rects.set(n.id, rect)
     const text = sized.find((s) => s.id === n.id)!.text
     const meta = d.meta({ id: n.id, kind: 'node', block: op.id, label: n.label, detail: n.detail, color: n.color ?? 'neutral', shape: n.shape ?? 'box' })
-    d.put(nodeSkeleton(eid(n.id), rect, text, n.shape, n.color, meta), rect, meta, text)
+    putNode(d, rect, text, n.shape, n.color, meta)
     ids.push(eid(n.id))
   }
   for (const e of edges) {
@@ -317,7 +409,7 @@ function diagramOp(d: Draft, op: Extract<VisualOp, { op: 'diagram' }>): void {
     ids.push(eid(`edge:${e.from}:${e.to}`))
     if (e.label) ids.push(eid(`edge:${e.from}:${e.to}:label`))
   }
-  focusIfOffscreen(d, ids)
+  focusOn(d, ids)
 }
 
 function addOp(d: Draft, op: Extract<VisualOp, { op: 'add' }>): void {
@@ -331,10 +423,10 @@ function addOp(d: Draft, op: Extract<VisualOp, { op: 'add' }>): void {
   for (const n of op.nodes ?? []) {
     const s = adjust(sizeNode(n), n.shape)
     const rect = anchor
-      ? findSlotNear(anchor, { w: s.w, h: s.h }, side, d.world.obstacles(), 100, d.usable)
+      ? findSlotNear(anchor, { w: s.w, h: s.h }, side, d.world.slotObstacles(), 100, d.usable)
       : findFreeRect({ w: s.w, h: s.h }, d.world.obstacles(), d.usable)
     const meta = d.meta({ id: n.id, kind: 'node', block: op.diagram, label: n.label, detail: n.detail, color: n.color ?? 'neutral', shape: n.shape ?? 'box' })
-    d.put(nodeSkeleton(eid(n.id), rect, s.text, n.shape, n.color, meta), rect, meta, s.text)
+    putNode(d, rect, s.text, n.shape, n.color, meta)
     rects.set(n.id, rect)
     ids.push(eid(n.id))
   }
@@ -348,7 +440,8 @@ function addOp(d: Draft, op: Extract<VisualOp, { op: 'add' }>): void {
     arrowSkeleton(d, e, a, b, op.diagram)
     ids.push(eid(`edge:${e.from}:${e.to}`))
   }
-  if (ids.length) focusIfOffscreen(d, ids)
+  const context = op.diagram ? blockIds(d, op.diagram).filter((id) => d.world.elements.get(id)?.echo?.kind !== 'ring') : anchorEl ? [anchorEl.id] : []
+  if (ids.length) reveal(d, ids, context)
 }
 
 function chartOp(d: Draft, op: Extract<VisualOp, { op: 'chart' }>): void {
@@ -374,7 +467,7 @@ function chartOp(d: Draft, op: Extract<VisualOp, { op: 'chart' }>): void {
   const note = (id: string): void => void ids.push(eid(id))
 
   if (op.title) {
-    textSk(d, eid(part('title')), at.x, at.y, op.title, FONT.title, INK, d.meta({ id: op.id, kind: 'title', block: op.id }))
+    putTitle(d, eid(part('title')), op.id, at.x, at.y, op.title)
     note(part('title'))
   }
   // Axis titles: units are always shown, because a number without one teaches nothing.
@@ -407,7 +500,7 @@ function chartOp(d: Draft, op: Extract<VisualOp, { op: 'chart' }>): void {
   note(part('yaxis'))
 
   const slot = plotW / pts.length
-  const color = colorOf('blue')
+  const color = colorOf('pink')
   const centers: Array<[number, number]> = []
   pts.forEach((p, i) => {
     const cx = px + slot * (i + 0.5)
@@ -418,11 +511,14 @@ function chartOp(d: Draft, op: Extract<VisualOp, { op: 'chart' }>): void {
       const top0 = p.y >= 0 ? cy : zeroY
       const h = Math.max(2, Math.abs(zeroY - cy))
       const id = part(`bar${i}`)
-      d.put(sk({ type: 'rectangle', id: eid(id), x: cx - bw / 2, y: top0, width: bw, height: h, strokeColor: color.stroke, backgroundColor: color.fill, fillStyle: 'solid', strokeWidth: 2, roughness: 0, roundness: { type: 3 }, customData: { echo: pm(id) } }), { x: cx - bw / 2, y: top0, w: bw, h }, pm(id))
+      const rect = { x: cx - bw / 2, y: top0, w: bw, h }
+      putShadow(d, id, 'rectangle', { ...rect, h: Math.max(2, h - SHADOW.y) }, color.shade, op.id)
+      d.put(sk({ type: 'rectangle', id: eid(id), x: rect.x, y: rect.y, width: bw, height: h, strokeColor: INK, backgroundColor: color.fill, fillStyle: 'solid', strokeWidth: 2, roughness: 0, roundness: { type: 3 }, groupIds: stickerGroup(id), customData: { echo: pm(id) } }), rect, pm(id))
+      note(`${id}__shadow`)
       note(id)
     } else {
       const id = part(`dot${i}`)
-      d.put(sk({ type: 'ellipse', id: eid(id), x: cx - 6, y: cy - 6, width: 12, height: 12, strokeColor: color.stroke, backgroundColor: color.stroke, fillStyle: 'solid', strokeWidth: 2, roughness: 0, customData: { echo: pm(id) } }), { x: cx - 6, y: cy - 6, w: 12, h: 12 }, pm(id))
+      d.put(sk({ type: 'ellipse', id: eid(id), x: cx - 7, y: cy - 7, width: 14, height: 14, strokeColor: INK, backgroundColor: ACCENT, fillStyle: 'solid', strokeWidth: 2, roughness: 0, customData: { echo: pm(id) } }), { x: cx - 7, y: cy - 7, w: 14, h: 14 }, pm(id))
       note(id)
     }
     // Value label (exact supplied value) just above the mark.
@@ -439,7 +535,7 @@ function chartOp(d: Draft, op: Extract<VisualOp, { op: 'chart' }>): void {
   })
   if (op.kind === 'line' && centers.length > 1) {
     const [x0, y0] = centers[0]
-    d.put(sk({ type: 'line', id: eid(part('line')), x: x0, y: y0, points: centers.map(([x, y]) => [x - x0, y - y0]), strokeColor: color.stroke, strokeWidth: 3, roughness: 0, roundness: null, customData: { echo: pm('line') } }), union(centers.map(([x, y]) => ({ x, y, w: 0, h: 0 })))!, pm('line'))
+    d.put(sk({ type: 'line', id: eid(part('line')), x: x0, y: y0, points: centers.map(([x, y]) => [x - x0, y - y0]), strokeColor: ACCENT, strokeWidth: 3, roughness: 0, roundness: { type: 2 }, customData: { echo: pm('line') } }), union(centers.map(([x, y]) => ({ x, y, w: 0, h: 0 })))!, pm('line'))
     note(part('line'))
   }
   // X axis title and honesty caption.
@@ -449,10 +545,10 @@ function chartOp(d: Draft, op: Extract<VisualOp, { op: 'chart' }>): void {
   note(part('xtitle'))
   const caption = series.illustrative ? 'Illustrative data - not measured' : series.source ? `Source: ${series.source}` : ''
   if (caption) {
-    textSk(d, eid(part('caption')), at.x, py + plotH + 66, caption, FONT.small, series.illustrative ? '#c92a2a' : MUTED, pm('caption'))
+    textSk(d, eid(part('caption')), at.x, py + plotH + 66, caption, FONT.small, series.illustrative ? ACCENT_DEEP : MUTED, pm('caption'))
     note(part('caption'))
   }
-  focusIfOffscreen(d, ids)
+  focusOn(d, ids)
 }
 
 function tableOp(d: Draft, op: Extract<VisualOp, { op: 'table' }>): void {
@@ -461,20 +557,27 @@ function tableOp(d: Draft, op: Extract<VisualOp, { op: 'table' }>): void {
     const longest = Math.max(c.length, ...op.rows.map((r) => r[i]?.length ?? 0))
     return Math.max(120, Math.min(260, Math.ceil(longest * FONT.node * 0.6) + 36))
   })
-  const rowH = 50
+  const all = [op.columns, ...op.rows]
+  // Each column wraps to its own width; a row is as tall as its tallest cell.
+  const wrapAt = widths.map((w) => Math.max(8, Math.floor((w - 28) / ((FONT.node - 1) * 0.6))))
+  const cellText = all.map((row) => row.slice(0, cols).map((cell, c) => wrapText(cell, wrapAt[c]).join('\n')))
+  const rowHs = cellText.map((row) => Math.max(50, ...row.map((t) => measure(t.split('\n'), FONT.node - 1).h + 24)))
+  const rowY = rowHs.map((_, r) => rowHs.slice(0, r).reduce((a, b) => a + b, 0))
   const titleH = op.title ? 48 : 0
-  const size = { w: widths.reduce((a, b) => a + b, 0), h: titleH + rowH * (op.rows.length + 1) }
+  const size = { w: widths.reduce((a, b) => a + b, 0), h: titleH + rowHs.reduce((a, b) => a + b, 0) }
   const at = findFreeRect(size, d.world.obstacles(), d.usable, { fresh: !!op.new_region })
   const ids: string[] = []
   if (op.title) {
-    textSk(d, eid(`${op.id}__title`), at.x, at.y, op.title, FONT.title, INK, d.meta({ id: op.id, kind: 'title', block: op.id }))
+    putTitle(d, eid(`${op.id}__title`), op.id, at.x, at.y, op.title)
     ids.push(eid(`${op.id}__title`))
   }
-  const all = [op.columns, ...op.rows]
+  // One shadow behind the whole grid makes the table read as a single card.
+  putShadow(d, op.id, 'rectangle', { x: at.x, y: at.y + titleH, w: size.w, h: size.h - titleH }, colorOf('pink').shade, op.id)
+  ids.push(shadowId(op.id))
   all.forEach((row, r) => {
     let x = at.x
     row.slice(0, cols).forEach((cell, c) => {
-      const rect = { x, y: at.y + titleH + r * rowH, w: widths[c], h: rowH }
+      const rect = { x, y: at.y + titleH + rowY[r], w: widths[c], h: rowHs[r] }
       const id = `${op.id}__r${r}c${c}`
       const meta = d.meta({ id, kind: 'part', block: op.id })
       const header = r === 0
@@ -486,12 +589,12 @@ function tableOp(d: Draft, op: Extract<VisualOp, { op: 'table' }>): void {
           y: rect.y,
           width: rect.w,
           height: rect.h,
-          strokeColor: '#8d8b84',
-          backgroundColor: header ? '#e7e5de' : '#ffffff',
+          strokeColor: INK,
+          backgroundColor: header ? INK : r % 2 === 0 ? '#fbf7f9' : '#ffffff',
           fillStyle: 'solid',
           strokeWidth: 1.5,
           roughness: 0,
-          label: { text: wrapText(cell, 24).join('\n'), fontSize: FONT.node - 1, fontFamily: FONT_FAMILY, strokeColor: INK, textAlign: 'center', verticalAlign: 'middle' },
+          label: { text: cellText[r][c], fontSize: FONT.node - 1, fontFamily: header ? DISPLAY_FAMILY : FONT_FAMILY, strokeColor: header ? '#ffffff' : INK, textAlign: 'center', verticalAlign: 'middle' },
           customData: { echo: meta }
         }),
         rect,
@@ -502,7 +605,7 @@ function tableOp(d: Draft, op: Extract<VisualOp, { op: 'table' }>): void {
       x += widths[c]
     })
   })
-  focusIfOffscreen(d, ids)
+  focusOn(d, ids)
 }
 
 function timelineOp(d: Draft, op: Extract<VisualOp, { op: 'timeline' }>): void {
@@ -514,7 +617,7 @@ function timelineOp(d: Draft, op: Extract<VisualOp, { op: 'timeline' }>): void {
   const lineY = at.y + titleH + 95
   const ids: string[] = []
   if (op.title) {
-    textSk(d, eid(`${op.id}__title`), at.x, at.y, op.title, FONT.title, INK, d.meta({ id: op.id, kind: 'title', block: op.id }))
+    putTitle(d, eid(`${op.id}__title`), op.id, at.x, at.y, op.title)
     ids.push(eid(`${op.id}__title`))
   }
   const pm = (id: string): EchoMeta => d.meta({ id, kind: 'part', block: op.id })
@@ -525,22 +628,22 @@ function timelineOp(d: Draft, op: Extract<VisualOp, { op: 'timeline' }>): void {
     const above = i % 2 === 0
     const lines = [...wrapText(ev.label, 20), ...(ev.detail ? wrapText(ev.detail, 24) : [])]
     const m = measure(lines, FONT.small)
-    const meta = d.meta({ id: ev.id, kind: 'node', block: op.id, label: ev.label, detail: ev.detail, color: 'purple', shape: 'round' })
-    d.put(nodeSkeleton(eid(ev.id), { x: cx - 10, y: lineY - 10, w: 20, h: 20 }, '', 'round', 'purple', meta), { x: cx - 10, y: lineY - 10, w: 20, h: 20 }, meta)
+    const meta = d.meta({ id: ev.id, kind: 'node', block: op.id, label: ev.label, detail: ev.detail, color: 'pink', shape: 'round' })
+    putNode(d, { x: cx - 12, y: lineY - 12, w: 24, h: 24 }, '', 'round', 'pink', meta)
     ids.push(eid(ev.id))
     const textH = m.h + (ev.when ? 24 : 0)
     const ty = above ? lineY - 28 - textH : lineY + 28
     let y = ty
     if (ev.when) {
       const ww = measure([ev.when], FONT.small).w
-      textSk(d, eid(`${ev.id}__when`), cx - ww / 2, y, ev.when, FONT.small, ACCENT, pm(`${ev.id}__when`), 'center')
+      textSk(d, eid(`${ev.id}__when`), cx - ww / 2, y, ev.when, FONT.small + 2, ACCENT_DEEP, pm(`${ev.id}__when`), 'center', DISPLAY_FAMILY)
       ids.push(eid(`${ev.id}__when`))
       y += 24
     }
     textSk(d, eid(`${ev.id}__text`), cx - m.w / 2, y, lines.join('\n'), FONT.small, INK, pm(`${ev.id}__text`), 'center')
     ids.push(eid(`${ev.id}__text`))
   })
-  focusIfOffscreen(d, ids)
+  focusOn(d, ids)
 }
 
 function noteOp(d: Draft, op: Extract<VisualOp, { op: 'note' }>): void {
@@ -548,31 +651,44 @@ function noteOp(d: Draft, op: Extract<VisualOp, { op: 'note' }>): void {
   const m = measure(lines, FONT.small + 1)
   const size = { w: Math.max(140, m.w + 36), h: m.h + 30 }
   const near = op.near ? d.world.resolve(op.near) : undefined
-  const rect = near ? findSlotNear(near.rect, size, 'below', d.world.obstacles(), 60) : findFreeRect(size, d.world.obstacles(), d.usable)
-  const c = op.color ? colorOf(op.color) : { stroke: '#e0b100', fill: '#fff3bf' }
-  const meta = d.meta({ id: op.id, kind: 'note' })
+  const rect = near ? findSlotNear(near.rect, size, 'below', d.world.slotObstacles(), 60) : findFreeRect(size, d.world.obstacles(), d.usable)
+  const meta = d.meta({ id: op.id, kind: 'note', color: op.color })
+  putNote(d, rect, lines.join('\n'), op.color, meta)
+  if (near) reveal(d, [eid(op.id), shadowId(op.id)], [near.id])
+  else focusOn(d, [eid(op.id), shadowId(op.id)])
+}
+
+const STICKY = { stroke: INK, fill: '#fff4b8', shade: '#f5cf4d' }
+/** Sticky notes sit at a slight, consistent tilt so they read as handwritten asides. */
+const NOTE_ANGLE = -0.025
+
+function putNote(d: Draft, rect: Rect, text: string, color: string | undefined, meta: EchoMeta, opacity = 100): void {
+  const c = color ? colorOf(color) : STICKY
+  putShadow(d, meta.id, 'rectangle', rect, c.shade, meta.block, opacity, NOTE_ANGLE)
   d.put(
     sk({
       type: 'rectangle',
-      id: eid(op.id),
+      id: eid(meta.id),
       x: rect.x,
       y: rect.y,
       width: rect.w,
       height: rect.h,
+      angle: NOTE_ANGLE,
       strokeColor: c.stroke,
       backgroundColor: c.fill,
       fillStyle: 'solid',
-      strokeWidth: 1.5,
+      strokeWidth: 2,
       roughness: 0,
+      opacity,
       roundness: { type: 3 },
-      label: { text: lines.join('\n'), fontSize: FONT.small + 1, fontFamily: FONT_FAMILY, strokeColor: INK, textAlign: 'center', verticalAlign: 'middle' },
+      groupIds: stickerGroup(meta.id),
+      label: { text, fontSize: FONT.small + 1, fontFamily: FONT_FAMILY, strokeColor: INK, textAlign: 'center', verticalAlign: 'middle' },
       customData: { echo: meta }
     }),
     rect,
     meta,
-    lines.join('\n')
+    text
   )
-  focusIfOffscreen(d, [eid(op.id)])
 }
 
 function clearHighlights(d: Draft): void {
@@ -586,6 +702,8 @@ function clearHighlights(d: Draft): void {
   // Bound labels of dimmed containers were dimmed too.
   for (const el of d.world.elements.values()) if (el.type === 'text' && el.containerId && el.opacity < 100) d.patch(el.id, { opacity: 100 })
 }
+
+const ringId = (ref: string): string => `hl_${ref.replace(/[^a-z0-9_]/gi, '_')}`
 
 function highlightOp(d: Draft, op: Extract<VisualOp, { op: 'highlight' }>): void {
   clearHighlights(d)
@@ -607,29 +725,25 @@ function highlightOp(d: Draft, op: Extract<VisualOp, { op: 'highlight' }>): void
     return
   }
   for (const { ref, rect } of targets) {
-    const r = rect
-    const id = `hl_${ref.replace(/[^a-z0-9_]/gi, '_')}`
-    const meta = d.meta({ id, kind: 'ring' })
-    d.put(
-      sk({
-        type: 'rectangle',
-        id: eid(id),
-        x: r.x - 8,
-        y: r.y - 8,
-        width: r.w + 16,
-        height: r.h + 16,
-        strokeColor: ACCENT,
-        backgroundColor: 'transparent',
-        fillStyle: 'solid',
-        strokeWidth: 4,
-        roughness: 0,
-        roundness: { type: 3 },
-        customData: { echo: meta }
-      }),
-      { x: r.x - 8, y: r.y - 8, w: r.w + 16, h: r.h + 16 },
-      meta
-    )
+    const id = ringId(ref)
+    // A soft wide glow under a crisp ring: reads as "lit up" rather than "boxed".
+    const layers = [
+      { id: `${id}__glow`, pad: 14, width: 12, opacity: 22 },
+      { id, pad: 11, width: 3.5, opacity: 100 }
+    ]
+    for (const l of layers) {
+      const r = { x: rect.x - l.pad, y: rect.y - l.pad, w: rect.w + l.pad * 2 + SHADOW.x, h: rect.h + l.pad * 2 + SHADOW.y }
+      const meta = d.meta({ id: l.id, kind: 'ring' })
+      d.put(
+        sk({ type: 'rectangle', id: eid(l.id), x: r.x, y: r.y, width: r.w, height: r.h, strokeColor: ACCENT, backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: l.width, roughness: 0, opacity: l.opacity, roundness: { type: 3 }, customData: { echo: meta } }),
+        r,
+        meta
+      )
+    }
   }
+  const blocks = [...new Set(targets.map((t) => t.el?.echo?.block).filter((b): b is string => !!b))]
+  const context = blocks.flatMap((b) => blockIds(d, b)).filter((id) => d.world.elements.get(id)?.echo?.kind !== 'ring')
+  panTo(d, targets.map((t) => (t.el ? t.el.id : eid(ringId(t.ref)))), context)
   if (op.dim_others) {
     const keep = new Set<string>()
     const blocks = new Set<string>()
@@ -642,6 +756,7 @@ function highlightOp(d: Draft, op: Extract<VisualOp, { op: 'highlight' }>): void
     for (const el of d.world.echoElements()) {
       const m = el.echo!
       if (m.kind === 'ring' || !m.block || !blocks.has(m.block) || keep.has(el.id)) continue
+      if (m.kind === 'shadow' && m.of && keepLogical.has(m.of)) continue
       if ((m.kind === 'edge' || (m.kind === 'part' && m.from && m.to)) && (keepLogical.has(m.from!) || keepLogical.has(m.to!))) continue
       d.patch(el.id, { opacity: DIM_OPACITY })
       el.opacity = DIM_OPACITY
@@ -672,16 +787,18 @@ function updateOp(d: Draft, op: Extract<VisualOp, { op: 'update' }>): void {
     const cy = el.rect.y + el.rect.h / 2
     const rect = textChange ? { x: cx - sized.w / 2, y: cy - sized.h / 2, w: sized.w, h: sized.h } : el.rect
     const meta = d.meta({ ...m, label, detail, color })
+    putShadow(d, m.id, shapeType(m.shape as NodeSpecT['shape']), rect, colorOf(color).shade, m.block, el.opacity)
     d.put(nodeSkeleton(el.id, rect, textChange ? sized.text : sizeNode({ id: m.id, label: m.label ?? '', detail: m.detail }).text, m.shape as NodeSpecT['shape'], color, meta, el.opacity), rect, meta, sized.text)
     rerouteEdges(d, m.id)
-    d.focusIds = [el.id]
+    panTo(d, [el.id])
   } else if (m.kind === 'note' && op.label) {
     const meta = d.meta({ ...m })
     const lines = wrapText(op.label, 26)
     const mm = measure(lines, FONT.small + 1)
     const rect = { x: el.rect.x, y: el.rect.y, w: Math.max(140, mm.w + 36), h: mm.h + 30 }
-    const c = colorOf(op.color ?? m.color)
-    d.put(sk({ type: 'rectangle', id: el.id, x: rect.x, y: rect.y, width: rect.w, height: rect.h, strokeColor: c.stroke, backgroundColor: c.fill, fillStyle: 'solid', strokeWidth: 1.5, roughness: 0, roundness: { type: 3 }, label: { text: lines.join('\n'), fontSize: FONT.small + 1, fontFamily: FONT_FAMILY, strokeColor: INK, textAlign: 'center', verticalAlign: 'middle' }, customData: { echo: meta } }), rect, meta, lines.join('\n'))
+    const color = op.color ?? m.color
+    putNote(d, rect, lines.join('\n'), color, { ...meta, color }, el.opacity)
+    panTo(d, [el.id])
   }
 }
 
@@ -693,23 +810,34 @@ function moveOp(d: Draft, op: Extract<VisualOp, { op: 'move' }>): void {
   const target = findSlotNear(anchor.rect, { w: el.rect.w, h: el.rect.h }, op.side, obstacles)
   d.patch(el.id, { x: target.x, y: target.y })
   el.rect = target
+  const shadow = d.world.elements.get(shadowId(op.id))
+  if (shadow) {
+    d.patch(shadow.id, { x: target.x + SHADOW.x, y: target.y + SHADOW.y })
+    shadow.rect = { ...shadow.rect, x: target.x + SHADOW.x, y: target.y + SHADOW.y }
+  }
   rerouteEdges(d, op.id)
-  d.focusIds = [el.id]
+  panTo(d, [el.id])
 }
 
 function groupOp(d: Draft, op: Extract<VisualOp, { op: 'group' }>): void {
-  const rects = op.members.map((m) => d.world.resolve(m)?.rect).filter((r): r is Rect => !!r)
-  const box = union(rects)
-  if (!box) return
+  const members = op.members.map((m) => d.world.resolve(m)).filter((e): e is NonNullable<typeof e> => !!e)
+  const nodesBox = union(members.map((m) => m.rect))
+  if (!nodesBox) return
+  // A diagram title sitting right above the grouped nodes goes inside the boundary rather than being cut by it.
+  const titles = [...new Set(members.map((m) => m.echo?.block).filter((b): b is string => !!b))]
+    .flatMap((b) => [d.world.elements.get(eid(`${b}:title`)), d.world.elements.get(eid(`${b}__swipe`))])
+    .filter((t): t is NonNullable<typeof t> => !!t && overlaps(t.rect, { ...nodesBox, y: nodesBox.y - 90, h: nodesBox.h + 90 }, 0))
+  const box = union([nodesBox, ...titles.map((t) => t.rect)])!
   const pad = 30
-  const rect = { x: box.x - pad, y: box.y - pad - (op.label ? 10 : 0), w: box.w + pad * 2, h: box.h + pad * 2 + (op.label ? 10 : 0) }
+  // The label sits along the bottom edge: the top edge is usually right under a diagram title.
+  const rect = { x: box.x - pad, y: box.y - pad, w: box.w + pad * 2, h: box.h + pad * 2 + (op.label ? 18 : 0) }
   const meta = d.meta({ id: op.id, kind: 'group' })
-  d.put(sk({ type: 'rectangle', id: eid(op.id), x: rect.x, y: rect.y, width: rect.w, height: rect.h, strokeColor: '#8d8b84', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 2, strokeStyle: 'dashed', roughness: 0, roundness: { type: 3 }, customData: { echo: meta } }), rect, meta)
+  d.put(sk({ type: 'rectangle', id: eid(op.id), x: rect.x, y: rect.y, width: rect.w, height: rect.h, strokeColor: '#b5b1a8', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 2, strokeStyle: 'dashed', roughness: 0, roundness: { type: 3 }, customData: { echo: meta } }), rect, meta)
   if (op.label) {
     const lm = d.meta({ id: `${op.id}__label`, kind: 'part', block: op.id })
-    textSk(d, eid(`${op.id}__label`), rect.x + 14, rect.y + 6, op.label, FONT.small, MUTED, lm)
+    textSk(d, eid(`${op.id}__label`), rect.x + 16, rect.y + rect.h - FONT.small * 1.3 - 12, op.label, FONT.small + 1, ACCENT_DEEP, lm, 'left', DISPLAY_FAMILY)
   }
-  d.focusIds = [eid(op.id)]
+  reveal(d, [eid(op.id)], [])
 }
 
 function removeOp(d: Draft, op: Extract<VisualOp, { op: 'remove' }>): void {
@@ -717,13 +845,13 @@ function removeOp(d: Draft, op: Extract<VisualOp, { op: 'remove' }>): void {
   const doomed = new Set<string>()
   for (const el of d.world.echoElements()) {
     const m = el.echo!
-    if (logical.has(m.id) || (m.block && logical.has(m.block))) doomed.add(el.id)
+    if (logical.has(m.id) || (m.block && logical.has(m.block)) || (m.of && logical.has(m.of))) doomed.add(el.id)
   }
   // Arrows and highlight rings that point at removed things go with them.
   for (const el of d.world.echoElements()) {
     const m = el.echo!
     if ((m.kind === 'edge' || (m.kind === 'part' && m.from && m.to)) && (doomed.has(eid(m.from!)) || doomed.has(eid(m.to!)))) doomed.add(el.id)
-    if (m.kind === 'ring' && [...doomed].some((id) => m.id === `hl_${id.replace(/^echo:/, '').replace(/[^a-z0-9_]/gi, '_')}`)) doomed.add(el.id)
+    if (m.kind === 'ring' && [...doomed].some((id) => m.id.replace(/__glow$/, '') === ringId(id.replace(/^echo:/, '')))) doomed.add(el.id)
   }
   for (const id of doomed) d.remove(id)
 }
@@ -739,7 +867,10 @@ function focusOp(d: Draft, op: Extract<VisualOp, { op: 'focus' }>): void {
     if (direct) ids.add(direct.id)
     for (const m of blockIds(d, t)) ids.add(m)
   }
-  if (ids.size) d.focusIds = [...ids]
+  if (ids.size) {
+    d.focusIds = [...ids]
+    d.focusMode = 'frame'
+  }
 }
 
 export function applyOp(d: Draft, op: VisualOp): void {
@@ -789,8 +920,9 @@ export function translateOps(ops: VisualOp[], boardElements: BoardElement[], ctx
     }
   }
   // Highlights stay on top of what they mark; new elements are appended, so order is already correct.
-  const focusIds = ops.some((o) => o.op === 'highlight' || o.op === 'unhighlight') && !ops.some((o) => o.op === 'focus') ? [] : d.focusIds
-  d.batch.focus = focusIds.length ? { ids: focusIds, ...(d.focusFit ? { fit: true } : {}) } : undefined
+  const focusIds = d.focusIds
+  const context = d.focusMode === 'pan' && d.focusContext.length ? { context: d.focusContext } : {}
+  d.batch.focus = focusIds.length ? { ids: focusIds, mode: d.focusMode, ...context, ...(d.focusFit ? { fit: true } : {}) } : undefined
   return { batch: d.batch, focusIds, warnings: d.warnings }
 }
 
@@ -801,7 +933,7 @@ export type { Draft }
 // the earlier segments' remaining drawing has been applied. These helpers materialise a batch
 // into board-element-shaped data without touching the real board.
 
-const skeletonBounds = (s: ElementSkeleton): Rect => {
+export const skeletonBounds = (s: ElementSkeleton): Rect => {
   const pts = s.points as Array<[number, number]> | undefined
   if (Array.isArray(pts) && pts.length) {
     const xs = pts.map((p) => s.x + p[0])
@@ -811,7 +943,9 @@ const skeletonBounds = (s: ElementSkeleton): Rect => {
   if (s.type === 'text') {
     const lines = String(s.text ?? '').split('\n')
     const m = measure(lines, Number(s.fontSize ?? FONT.small))
-    return { x: s.x, y: s.y, w: m.w, h: m.h }
+    // Aligned text is anchored at x (see textSk).
+    const left = s.textAlign === 'center' ? s.x - m.w / 2 : s.textAlign === 'right' ? s.x - m.w : s.x
+    return { x: left, y: s.y, w: m.w, h: m.h }
   }
   return { x: s.x, y: s.y, w: Number(s.width ?? 0), h: Number(s.height ?? 0) }
 }

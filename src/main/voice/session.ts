@@ -1,14 +1,13 @@
 import type { VoiceConfig } from './config'
 import { LessonState, LessonTurn, type LessonBoardPort, type TurnIO } from '../lesson/controller'
 import { describeBoardForTutor, summarizeBoard, summarizeSelection } from '../lesson/summary'
-import { LESSON_PROMPT_ADDENDUM, SegmentStreamParser } from '../lesson/tutorProtocol'
+import { DEEP_DIVE_ADDENDUM, LESSON_PROMPT_ADDENDUM, SegmentStreamParser } from '../lesson/tutorProtocol'
 import { PhraseChunker, type Phrase } from './chunker'
 import { buildSystemPrompt } from './claude'
 import { EchoGuard } from './echoGuard'
 import { ConversationHistory } from './history'
-import { classifyIntent, isNoise } from './intent'
 import type { ChatMessage } from './history'
-import { asksAboutScreen, classifyIntent, isNoise, pickFiller } from './intent'
+import { asksAboutScreen, classifyIntent, DEEP_FILLERS, isNoise, pickFiller, SCREEN_FILLERS, wantsDeepDive } from './intent'
 import {
   ChatError,
   type ChatPort,
@@ -39,13 +38,25 @@ const TALK_RELEASE_TAIL_MS = 300
 const MAX_ENTRIES = 60
 /** How long to wait for the engine's playback position after an interruption. */
 const PARTIAL_WAIT_MS = 400
+/** How long a deep dive waits for the lesson window to open and its board to load. */
+const LESSON_OPEN_TIMEOUT_MS = 8000
+/** Token budgets: a normal lesson answer, and a deep dive (6-8 segments, each with its drawing). */
+const LESSON_MAX_TOKENS = 2400
+const DEEP_MAX_TOKENS = 7000
+/** What the "go deeper" button says on the learner's behalf. */
+export const DEEP_DIVE_REQUEST = 'Go deeper on that. Explain it in depth.'
 
 /** What the session needs to run a lesson with whiteboard visuals alongside the speech. */
 export interface LessonSupport {
   /** True while a lesson window is open and visuals are enabled. */
   available(): boolean
   board(): LessonBoardPort | null
+  /** Open the lesson window and resolve once its board is ready (false if it could not be opened). */
+  open?(timeoutMs: number): Promise<boolean>
 }
+
+/** Used when a deep dive was asked for but no whiteboard could be opened. */
+const VERBAL_DEEP_DIVE = `The learner asked you to go deep. For this answer, ignore the brevity rules above: give a thorough spoken explanation of up to about 12 sentences. Unpack the name, explain the problem it solves, how it works step by step, and one concrete example.`
 
 export interface SessionDeps {
   config: VoiceConfig
@@ -74,6 +85,8 @@ interface Reply {
   fullText: string
   /** Spoken right away while the screen is checked. Part of fullText, but kept out of history. */
   filler: string | null
+  /** The learner asked for depth: open the whiteboard and teach a full lesson. */
+  deep: boolean
   sinceFlush: string
   segments: Segment[]
   flushedAcks: number
@@ -240,6 +253,18 @@ export class VoiceSession {
   /** The visible Stop button. */
   stopResponse(): void {
     if (this.reply) this.interrupt('stop-button')
+  }
+
+  /**
+   * The "go deeper" button: asks for a deep dive on whatever was just discussed, as if the learner had said
+   * so. Returns false when there is nothing to go deeper on yet.
+   */
+  deepDive(): boolean {
+    if (!this.active || !this.history.toMessages(2).length) return false
+    if (this.reply) this.interrupt('deep-dive')
+    this.updateTurnEntry({ index: -1, text: DEEP_DIVE_REQUEST, suspect: false, entryId: null }, true)
+    this.submit(DEEP_DIVE_REQUEST)
+    return true
   }
 
   // --- Events from the audio engine -----------------------------------------------
@@ -466,6 +491,7 @@ export class VoiceSession {
       chunker: new PhraseChunker(),
       fullText: '',
       filler: null,
+      deep: wantsDeepDive(question) && !!(this.deps.lesson?.open || this.deps.lesson?.available()),
       sinceFlush: '',
       segments: [],
       flushedAcks: 0,
@@ -478,9 +504,11 @@ export class VoiceSession {
     this.reply = reply
     this.tts?.begin(reply.id)
     this.upsertEntry({ id: reply.id, role: 'assistant', text: '', final: false, spokenChars: 0 })
-    // Looking at the screen takes a moment: say so instead of going quiet.
-    if (this.deps.contextProvider?.isWatchingScreen?.() && asksAboutScreen(question)) {
-      reply.filler = this.lastFiller = pickFiller(this.lastFiller)
+    // Opening the whiteboard or looking at the screen takes a moment: say so instead of going quiet.
+    const watching = !!this.deps.contextProvider?.isWatchingScreen?.()
+    const fillers = reply.deep ? DEEP_FILLERS : watching && asksAboutScreen(question) ? SCREEN_FILLERS : null
+    if (fillers) {
+      reply.filler = this.lastFiller = pickFiller(this.lastFiller, Math.random, fillers)
       this.speakPhrase(reply, { text: reply.filler, flush: false })
       this.flushSegment(reply, true)
     }
@@ -522,12 +550,22 @@ export class VoiceSession {
     reply.lessonTurn = turn
     const parser = new SegmentStreamParser()
     try {
-      const withContext = await this.withLessonContext(messages, board)
+      const [withContext, context] = await Promise.all([
+        this.withLessonContext(messages, board),
+        this.deps.contextProvider?.getContext().catch(() => null) ?? null
+      ])
       if (!alive()) return
       await this.deps.chat.stream({
-        system: buildSystemPrompt(null) + '\n' + LESSON_PROMPT_ADDENDUM,
-        maxTokens: Math.max(this.deps.config.claudeMaxTokens, 2400),
+        // The whiteboard reaches the tutor through <lesson_context>; only the screen comes from here.
+        system:
+          buildSystemPrompt(context && { ...context, board: undefined }, reply.filler) +
+          '\n' +
+          LESSON_PROMPT_ADDENDUM +
+          (reply.deep ? '\n' + DEEP_DIVE_ADDENDUM : ''),
+        maxTokens: Math.max(this.deps.config.claudeMaxTokens, reply.deep ? DEEP_MAX_TOKENS : LESSON_MAX_TOKENS),
+        deep: reply.deep,
         messages: withContext,
+        image: context?.screenImage,
         signal: reply.abort.signal,
         onText: (delta) => {
           if (!alive()) return
@@ -572,13 +610,21 @@ export class VoiceSession {
   }
 
   private async runChat(reply: Reply, epoch: number): Promise<void> {
-    if (this.deps.lesson?.available()) return this.runLessonChat(reply, epoch)
     const alive = (): boolean => epoch === this.epoch && this.reply === reply && !reply.abort.signal.aborted
+    const lesson = this.deps.lesson
+    if (reply.deep && lesson?.open && !lesson.available()) {
+      // The filler is already playing; the lesson starts as soon as the board can be drawn on.
+      const opened = await lesson.open(LESSON_OPEN_TIMEOUT_MS).catch(() => false)
+      if (!alive()) return
+      if (!opened) this.log('[voice] lesson window did not open in time; explaining without the whiteboard')
+    }
+    if (lesson?.available()) return this.runLessonChat(reply, epoch)
     try {
       const context = (await this.deps.contextProvider?.getContext().catch(() => null)) ?? null
       if (!alive()) return
       await this.deps.chat.stream({
-        system: buildSystemPrompt(context, reply.filler),
+        system: buildSystemPrompt(context, reply.filler) + (reply.deep ? '\n' + VERBAL_DEEP_DIVE : ''),
+        ...(reply.deep ? { maxTokens: Math.max(this.deps.config.claudeMaxTokens, 1200), deep: true } : {}),
         messages: this.history.toMessages(this.deps.config.historyMessages),
         image: context?.screenImage,
         signal: reply.abort.signal,

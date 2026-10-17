@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readVoiceConfig } from '../src/main/voice/config'
-import type { ChatPort, ChatRequest, EnginePort, SttHooks, SttPort, TtsHooks, TtsPort, TurnInfo } from '../src/main/voice/ports'
-import { VoiceSession, type LessonSupport } from '../src/main/voice/session'
+import type { ChatPort, ChatRequest, EnginePort, SttHooks, SttPort, TtsHooks, TtsPort, TurnInfo, VoiceContextProvider } from '../src/main/voice/ports'
+import { DEEP_FILLERS, SCREEN_FILLERS } from '../src/main/voice/intent'
+import { DEEP_DIVE_REQUEST, VoiceSession, type LessonSupport } from '../src/main/voice/session'
+
+const DEEP_MAX = 7000
 import type { VoiceEvent } from '../src/shared/voice'
 import type { VisualPlan } from '../src/main/lesson/ops'
 import { FakeBoard, diagramPlan, sleep, until } from './helpers/lesson-fakes'
@@ -92,7 +95,7 @@ const seg = (objective: string, say: string, plan?: VisualPlan | string): string
 const SEG1 = seg('Show the parts', 'The CPU does the work. It reads from memory. Memory loads from disk.', diagramPlan('d1', [{ sentence: 1, ops: [{ op: 'highlight', targets: ['d1_b'] }] }]))
 const SEG2 = seg('Wrap up', 'That loop repeats billions of times a second.', { setup: [], cues: [{ sentence: 0, ops: [{ op: 'highlight', targets: ['d1_c'] }] }] })
 
-function setup() {
+function setup(contextProvider?: VoiceContextProvider) {
   const cfg = readVoiceConfig({ ANTHROPIC_API_KEY: 'a', DEEPGRAM_API_KEY: 'd' })
   if (!cfg.ok) throw new Error('config')
   const log: string[] = []
@@ -104,15 +107,23 @@ function setup() {
   const ttss: FakeTts[] = []
   let windowOpen = true
   let boardAttached = true
+  const opened: number[] = []
   const lesson: LessonSupport = {
     available: () => windowOpen,
     board: () => (windowOpen && boardAttached ? board : null),
+    open: async (timeoutMs) => {
+      opened.push(timeoutMs)
+      await sleep(5) // the window takes a moment to load
+      windowOpen = true
+      return true
+    }
   }
   const session = new VoiceSession({
     config: cfg.config,
     engine,
     chat,
     lesson,
+    contextProvider,
     createStt: (h) => (stts.push(new FakeStt(h)), stts.at(-1)!),
     createTts: (h) => (ttss.push(new FakeTts(h, log)), ttss.at(-1)!),
     emit: (e) => events.push(e),
@@ -125,7 +136,7 @@ function setup() {
     stts[0].turn('StartOfTurn', text.split(' ')[0], idx)
     stts[0].turn('EndOfTurn', text, idx)
   }
-  return { session, board, chat, engine, events, stts, ttss, ask, log, closeWindow: () => (windowOpen = false), detachBoard: () => (boardAttached = false), openWindow: () => (windowOpen = true) }
+  return { session, board, chat, engine, events, stts, ttss, ask, log, opened, closeWindow: () => (windowOpen = false), detachBoard: () => (boardAttached = false), openWindow: () => (windowOpen = true) }
 }
 
 describe('lesson mode through the voice session', () => {
@@ -134,6 +145,65 @@ describe('lesson mode through the voice session', () => {
     vi.useRealTimers()
   })
   afterEach(() => vi.useRealTimers())
+
+  it('opens the whiteboard and teaches a deep dive when asked to go deep', async () => {
+    const t = setup()
+    t.closeWindow()
+    t.chat.scripts.push(stream(SEG1 + SEG2))
+    t.ask('Explain CI/CD deeply', 0)
+
+    // The filler starts right away, before the window has even opened.
+    expect(DEEP_FILLERS).toContain(t.ttss[0].spoken[0])
+    await until(() => t.chat.calls.length === 1)
+    expect(t.opened).toHaveLength(1)
+    const call = t.chat.calls[0]
+    expect(call.system).toContain('LESSON MODE')
+    expect(call.system).toContain('DEEP DIVE')
+    expect(call.system).toContain('<already_said>')
+    expect(call.maxTokens).toBe(DEEP_MAX)
+    // The tutor's narration follows the filler.
+    await until(() => t.ttss[0].spoken.length >= 4)
+    expect(t.ttss[0].spoken.slice(1, 4)).toEqual(['The CPU does the work.', 'It reads from memory.', 'Memory loads from disk.'])
+  })
+
+  it('a normal question in an open lesson is not a deep dive', async () => {
+    const t = setup()
+    t.chat.scripts.push(stream(SEG2))
+    t.ask('What is CI/CD?', 0)
+    await until(() => t.chat.calls.length === 1)
+    expect(t.chat.calls[0].system).toContain('LESSON MODE')
+    expect(t.chat.calls[0].system).not.toContain('DEEP DIVE')
+    expect(t.opened).toHaveLength(0)
+  })
+
+  it('the go-deeper button asks for a deep dive on the last topic', async () => {
+    const t = setup()
+    expect(t.session.deepDive()).toBe(false) // nothing to go deeper on yet
+    t.chat.scripts.push(stream(SEG2), stream(SEG1))
+    t.ask('What is a CPU?', 0)
+    await until(() => t.chat.calls.length === 1)
+    expect(t.session.deepDive()).toBe(true)
+    await until(() => t.chat.calls.length === 2)
+    expect(t.chat.calls[1].system).toContain('DEEP DIVE')
+    expect(t.chat.calls[1].messages.at(-1)!.content).toContain(DEEP_DIVE_REQUEST)
+    expect(t.session.getEntries().some((e) => e.role === 'user' && e.text === DEEP_DIVE_REQUEST)).toBe(true)
+  })
+
+  it('sees the shared screen during a lesson too', async () => {
+    const shot = { mediaType: 'image/jpeg' as const, data: 'AAAA' }
+    const t = setup({
+      isWatchingScreen: () => true,
+      getContext: async () => ({ screen: 'A screenshot is attached.', screenImage: shot })
+    })
+    t.chat.scripts.push(stream(SEG2))
+    t.ask('Can you explain this thing on my screen?', 0)
+    await until(() => t.chat.calls.length === 1)
+
+    expect(SCREEN_FILLERS).toContain(t.ttss[0].spoken[0])
+    expect(t.chat.calls[0].image).toEqual(shot)
+    expect(t.chat.calls[0].system).toContain('<screen_context>')
+    expect(t.chat.calls[0].system).toContain('<already_said>')
+  })
 
   it('speaks the tutor narration while its own drawing is applied, in step with playback', async () => {
     const t = setup()

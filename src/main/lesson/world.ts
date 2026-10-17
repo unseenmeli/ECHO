@@ -5,7 +5,7 @@ import { union, type Rect } from './layout'
 export interface EchoMeta {
   /** Logical id the agents use. */
   id: string
-  kind: 'node' | 'edge' | 'title' | 'part' | 'ring' | 'note' | 'group'
+  kind: 'node' | 'edge' | 'title' | 'part' | 'ring' | 'note' | 'group' | 'shadow'
   /** Diagram / chart / table block this belongs to. */
   block?: string
   seg?: string
@@ -15,6 +15,8 @@ export interface EchoMeta {
   detail?: string
   color?: string
   shape?: string
+  /** For a shadow: the logical id of the element it sits behind. */
+  of?: string
 }
 
 export const ECHO_PREFIX = 'echo:'
@@ -96,6 +98,14 @@ export class World {
   /** Everything new content should avoid: every non-label element. */
   obstacles(): Rect[] {
     return [...this.elements.values()].filter((e) => !(e.type === 'text' && e.containerId)).map((e) => e.rect)
+  }
+
+  /**
+   * Obstacles for placing something next to an existing element: group outlines are left out, because
+   * they surround their members by design and would block every slot beside them.
+   */
+  slotObstacles(): Rect[] {
+    return [...this.elements.values()].filter((e) => !(e.type === 'text' && e.containerId) && e.echo?.kind !== 'group').map((e) => e.rect)
   }
 
   echoElements(): WorldElement[] {

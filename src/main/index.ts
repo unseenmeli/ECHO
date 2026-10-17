@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, nativeTheme, screen, shell } from 'electron'
-import { attachBoardHost, registerBoardIpc } from './board'
+import { attachBoardHost, registerBoardIpc, whenBoardReady } from './board'
 import { attachScreenHost, registerScreenIpc, screenContext } from './screenContext'
 import { createTray } from './tray'
 import windowIconPath from '../../resources/icon.png?asset'
@@ -134,10 +134,12 @@ ipcMain.on('companion:open-lesson', (event) => {
   if (companion && event.sender === companion.webContents) openLessonWindow()
 })
 
-// Button actions. "?" starts/ends the voice conversation (see ./voice); ">"
-// is still a stub until the lecture layer exists.
-ipcMain.on('companion:next', () => {
-  console.log('[companion] > pressed')
+// Button actions. "?" starts/ends the voice conversation (see ./voice). ">" is
+// "go deeper": a deep-dive lesson on what was just discussed, or just the
+// whiteboard if nothing has been discussed yet.
+ipcMain.on('companion:next', (event) => {
+  if (!companion || event.sender !== companion.webContents) return
+  if (!voiceHost.deepDive()) openLessonWindow()
 })
 
 // Window dragging. While the pointer is held, the window follows the OS cursor
@@ -201,7 +203,13 @@ if (!app.requestSingleInstanceLock()) {
 
     registerBoardIpc()
     registerScreenIpc(() => [companion, lesson].filter((w): w is BrowserWindow => !!w && !w.isDestroyed()))
-    voiceHost.register({ canCaptureScreen: (wc) => !!companion && !companion.isDestroyed() && wc === companion.webContents })
+    voiceHost.register({
+      canCaptureScreen: (wc) => !!companion && !companion.isDestroyed() && wc === companion.webContents,
+      openLesson: (timeoutMs) => {
+        openLessonWindow()
+        return whenBoardReady(timeoutMs)
+      }
+    })
     companion = createCompanionWindow()
 
     createTray({

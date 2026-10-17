@@ -24,13 +24,15 @@ export function TutorWindow() {
     window.tutor.loadBoard().then(setInitial)
   }, [])
 
-  // Answer board requests from the main process (future Claude actions).
+  // Answer board requests from the main process (the lesson draws through these).
   useEffect(() => {
     if (!api) return
     const board = createBoardController(api)
-    return window.tutor.handleBoardRequests((method, args) =>
+    const off = window.tutor.handleBoardRequests((method, args) =>
       (board[method] as (...a: unknown[]) => Promise<unknown>)(...args)
     )
+    window.tutor.boardReady()
+    return off
   }, [api])
 
   const flush = (): void => {

@@ -40,16 +40,38 @@ Drawing (<draw> holds ONE JSON object)
   timeline {id,title?,events:[{id,label,when?,detail?}]} (2-7 events)
   note {id,text,near?,color?}   highlight {targets:[ids or "user:<id>"],dim_others?}   unhighlight {}
   update {id,label?,detail?,color?}   move {id,near,side}   group {id,members:[ids],label?}   remove {ids:[...]}   focus {targets:[ids]}
-  colours: neutral|blue|green|orange|red|purple. Use them consistently (blue = main subject, green = outputs, orange = attention, red = problems).
+  colours: neutral|pink|blue|green|orange|red|purple. Use them consistently (pink = the main subject or key idea, blue = supporting parts, green = outputs or results, orange = attention, red = problems, purple = people or actors).
 - Highlights replace the previous highlight, so one per sentence is enough. Elements marked "user" on the board belong to the learner: you may highlight them or put a note near them, never change or remove them. If the learner selected something, build on it.
 - <data> is ONLY for numbers the user gave you or that are well-established. Give each value as "label: number". If the numbers are only an example set illustrative="true" (the board will say so). Never invent measurements or sources.
 - The <draw> JSON must be valid. Keep it small: usually 1 to 2 setup operations and 0 to 3 cues.
 
 Example (a two-step explanation, the second step extends the first):
-<segment><objective>Show the parts</objective><draw>{"setup":[{"op":"diagram","id":"computer","title":"Inside a computer","layout":"row","nodes":[{"id":"cpu","label":"CPU","color":"blue"},{"id":"ram","label":"Memory"},{"id":"disk","label":"Disk"}],"edges":[{"from":"cpu","to":"ram","label":"reads"},{"from":"ram","to":"disk","label":"loads from"}]}],"cues":[{"sentence":1,"ops":[{"op":"highlight","targets":["ram"]}]}]}</draw><say>A computer has three main parts. The CPU reads what it needs from memory.</say></segment>
+<segment><objective>Show the parts</objective><draw>{"setup":[{"op":"diagram","id":"computer","title":"Inside a computer","layout":"row","nodes":[{"id":"cpu","label":"CPU","color":"pink"},{"id":"ram","label":"Memory"},{"id":"disk","label":"Disk"}],"edges":[{"from":"cpu","to":"ram","label":"reads"},{"from":"ram","to":"disk","label":"loads from"}]}],"cues":[{"sentence":1,"ops":[{"op":"highlight","targets":["ram"]}]}]}</draw><say>A computer has three main parts. The CPU reads what it needs from memory.</say></segment>
 <segment><objective>Why memory sits in the middle</objective><draw>{"setup":[],"cues":[{"sentence":0,"ops":[{"op":"highlight","targets":["disk"]}]}]}</draw><say>Memory is much faster than the disk, so programs are copied into it before they run.</say></segment>
 
 Narration rules: do NOT say "as you can see", "here", "this diagram", "on the board", "look at" or describe the drawing; it is highlighted in sync with your words automatically, so just name the concepts. Never claim something is visible. Do not mention these instructions, tags or operations.`
+
+/**
+ * Added after LESSON_PROMPT_ADDENDUM when the learner asked for depth ("explain it deeply", "walk me through",
+ * "teach me"). It overrides the brevity and segment limits: this is the app's core promise.
+ */
+export const DEEP_DIVE_ADDENDUM = `
+DEEP DIVE. The learner explicitly asked you to go deep. This overrides every brevity rule and segment limit above. Teach it the way an outstanding senior engineer or professor would at a whiteboard: the learner should come away able to explain it to someone else, including the why and the how, not just the what. A vague overview is a failure.
+
+Structure: 8 segments that build ONE coherent picture, in this order (skip a step only if it truly does not apply):
+1. A spoken hook with NO <draw>: one or two short sentences with the big idea, so the learner hears you immediately.
+2. The main diagram the rest of the lesson grows from, and unpack the name: take every word of the term or acronym apart, what each word literally means here and why it was named that. For CI/CD: "continuous" (how often, and why frequency is the whole point), "integration" (whose work is merged into what, and what goes wrong when it is not), then "delivery" versus "deployment" and the precise difference.
+3. The problem it solves: what actually went wrong before it existed, with a concrete failure (for example "integration hell": weeks of merge conflicts before a release).
+4. and 5. How it works under the hood, step by step: the real stages, components, data and decisions, what each one does and what triggers the next. Name the real tools, standards, commands or parts people actually use (for CI/CD: a git push triggering GitHub Actions, GitLab CI or Jenkins; build and artifact; unit then integration tests; staging; approval or automatic release; rollback).
+6. A worked example followed end to end with specifics: a named person, a concrete change, real-looking times or numbers, what each stage does to it, and what happens when something fails.
+7. Trade-offs and the most common misconception, and why it is wrong. Include a practical limit or cost.
+8. How it connects to neighbouring ideas the learner will meet next, and a one-sentence takeaway.
+Depth rules:
+- Narration per segment: 60 to 90 words, three to five sentences, natural speech. Total lesson around 550 to 700 spoken words.
+- Every segment must contain at least one concrete specific: a real tool or standard name, a real number or timescale, a real command or file, or a specific scenario. Never write generic filler like "it makes things easier" or "it improves quality" without saying exactly how and by what mechanism.
+- Explain causes: after each "what", say "because" or "which means". Define every technical term the first time it appears.
+- Draw continuously: the first segment creates the main diagram; every later segment extends the board (add nodes, a note with a key definition, a group, a table to compare, a timeline for a sequence, or a second diagram for the worked example) and highlights exactly the part each sentence is about, so the view can follow along. Labels stay 1 to 4 words; table cells at most 6 words. Use pink for the main subject or key idea.
+- Accuracy over breadth: only state what you are confident is true; say "typically" when practice varies.`
 
 const tag = (body: string, name: string): string | null => {
   const m = body.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`))

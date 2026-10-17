@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { BoardBatch, BoardElement } from '../src/shared/board'
 import { findFreeRect, findSlotNear, layoutNodes, niceScale, overlaps, routeEdge, segmentHitsRect, sizeNode, usableView, type Rect } from '../src/main/lesson/layout'
 import { VisualPlanSchema, visualPlanJsonSchema, type VisualOp, type VisualPlan } from '../src/main/lesson/ops'
-import { fmt, layoutEdgeLabel, mergeBatch, translateOps } from '../src/main/lesson/translate'
+import { fmt, layoutEdgeLabel, mergeBatch, skeletonBounds, translateOps } from '../src/main/lesson/translate'
 import { SegmentStreamParser, containsDeictic, parseDrawing, splitSentences, stripDeictic } from '../src/main/lesson/tutorProtocol'
 import type { DataSeries } from '../src/main/lesson/types'
 import { validatePlan } from '../src/main/lesson/validate'
@@ -207,8 +207,18 @@ describe('translator', () => {
     const labels = batch.upsert.filter((s) => s.type === 'text' && (s.customData as { echo: { from?: string } }).echo.from)
     expect(labels.map((l) => l.text)).toEqual(['sends data', 'sends data', 'sends data'])
     expect(batch.bindings).toHaveLength(3)
-    // New content lands inside the visible area, so the camera is left alone.
-    expect(batch.focus).toBeUndefined()
+    // New content lands inside the visible area, and the camera frames it.
+    expect(batch.focus?.mode).toBe('frame')
+    for (const r of ['echo:d_n0', 'echo:d_n3']) expect(batch.focus?.ids).toContain(r)
+    // Every node is a sticker: a shadow underneath, grouped with it so they drag together.
+    for (const n of ['d_n0', 'd_n1', 'd_n2', 'd_n3']) {
+      const ids = batch.upsert.map((s) => s.id)
+      expect(ids.indexOf(`echo:${n}__shadow`)).toBeLessThan(ids.indexOf(`echo:${n}`))
+      const node = batch.upsert.find((s) => s.id === `echo:${n}`)!
+      const shadow = batch.upsert.find((s) => s.id === `echo:${n}__shadow`)!
+      expect(shadow.groupIds).toEqual(node.groupIds)
+      expect([shadow.x - node.x, shadow.y - node.y]).toEqual([6, 6])
+    }
     // Everything is tagged as lesson-owned so it can be told apart from the user's drawing.
     expect(batch.upsert.every((s) => (s.customData as { echo?: unknown }).echo)).toBe(true)
     expect(batch.upsert.every((s) => s.id.startsWith('echo:'))).toBe(true)
@@ -258,7 +268,7 @@ describe('translator', () => {
     expect(texts.some((t) => t.includes('m/s'))).toBe(true)
     expect(texts).toContain('Seconds')
     expect(texts.some((t) => /Illustrative data/.test(t))).toBe(true)
-    const bars = batch.upsert.filter((s) => String(s.id).includes('__bar'))
+    const bars = batch.upsert.filter((s) => /__bar\d+$/.test(String(s.id)))
     expect(bars).toHaveLength(3)
     // Bar heights are proportional to the supplied values.
     const h = (i: number) => Number(bars[i].height)
@@ -274,11 +284,10 @@ describe('translator', () => {
   it("highlights with a ring and never changes the user's own element", () => {
     const user = [userRect('u1', 100, 200)]
     const r = translateOps([{ op: 'highlight', targets: ['user:u1'], dim_others: true }], user, CTX)
-    expect(r.batch.upsert).toHaveLength(1)
-    expect(r.batch.upsert[0].id).toBe('echo:hl_user_u1')
+    expect(r.batch.upsert.map((s) => s.id)).toEqual(['echo:hl_user_u1__glow', 'echo:hl_user_u1'])
     expect(r.batch.patch).toEqual([])
     expect(r.batch.remove).toEqual([])
-    expect(r.batch.focus).toBeUndefined() // a highlight never moves the camera
+    expect(r.batch.focus).toEqual({ ids: ['u1'], mode: 'pan' }) // the camera glides to what is being talked about
   })
 
   it('moves the highlight (and undoes dimming) when the next one is applied', () => {
@@ -321,9 +330,9 @@ describe('translator', () => {
 
   it('draws tables and timelines', () => {
     const t = translateOps([{ op: 'table', id: 't', title: 'Compare', columns: ['Feature', 'A', 'B'], rows: [['Speed', 'Fast', 'Slow'], ['Cost', 'High', 'Low']] }], [], CTX)
-    expect(t.batch.upsert.filter((s) => s.type === 'rectangle')).toHaveLength(9)
+    expect(t.batch.upsert.filter((s) => /__r\d+c\d+$/.test(s.id))).toHaveLength(9)
     const tl = translateOps([{ op: 'timeline', id: 'tl', events: [{ id: 'e1', label: 'First', when: '1990' }, { id: 'e2', label: 'Second', when: '2000' }, { id: 'e3', label: 'Third' }] }], [], CTX)
-    expect(tl.batch.upsert.filter((s) => s.type === 'ellipse')).toHaveLength(3)
+    expect(tl.batch.upsert.filter((s) => s.type === 'ellipse' && !s.id.endsWith('__shadow'))).toHaveLength(3)
   })
 
   it('puts a new-topic diagram in a fresh region', () => {
@@ -364,8 +373,7 @@ describe('arrow routing and camera policy', () => {
     const labels = batch.upsert.filter((s) => s.type === 'text' && (s.customData as { echo: { from?: string } }).echo.from)
     expect(labels.length).toBe(2)
     for (const l of labels) {
-      const w = String(l.text).length * 16 * 0.6
-      const box = { x: l.x, y: l.y, w, h: 16 * 1.3 }
+      const box = skeletonBounds(l)
       for (const n of nodes) expect(overlaps(box, n, 0)).toBe(false)
       // Above the line, not on it.
       const arrow = batch.upsert.find((s) => s.id === String(l.id).replace(/:label$/, ''))!
@@ -401,10 +409,7 @@ describe('arrow routing and camera policy', () => {
     expect(Math.abs(a.y - b.y)).toBeGreaterThanOrEqual(20) // separate lanes, not stacked
     const la = batch.upsert.find((x) => x.id === 'echo:edge:memory:disk:label')!
     const lb = batch.upsert.find((x) => x.id === 'echo:edge:disk:memory:label')!
-    const box = (l: typeof la) => {
-      const lines = String(l.text).split('\n')
-      return { x: l.x, y: l.y, w: Math.max(...lines.map((t) => t.length)) * 16 * 0.6, h: lines.length * 16 * 1.3 }
-    }
+    const box = (l: typeof la) => skeletonBounds(l)
     expect(overlaps(box(la), box(lb), 0)).toBe(false)
     for (const n of nodeRects(batch)) {
       expect(overlaps(box(la), n, 0)).toBe(false)
@@ -434,21 +439,36 @@ describe('arrow routing and camera policy', () => {
     const board = mergeBatch([], first.batch)
     const r = translateOps([{ op: 'highlight', targets: ['d'] }], board, CTX)
     expect(r.warnings).toEqual([])
-    expect(r.batch.upsert).toHaveLength(1)
-    const ring = r.batch.upsert[0]
+    expect(r.batch.upsert).toHaveLength(2)
+    const ring = r.batch.upsert.find((s) => s.id === 'echo:hl_d')!
     for (const n of nodeRects(first.batch)) {
       expect(ring.x).toBeLessThanOrEqual(n.x)
       expect(Number(ring.width) + ring.x).toBeGreaterThanOrEqual(n.x + n.w)
     }
   })
 
-  it('leaves the camera alone when the new content fits in view, and moves it when it does not', () => {
-    const view = usableView(VIEW)
-    const wall: BoardElement = userRect('wall', view.x - 5, view.y - 5, view.w + 10, view.h + 10)
-    const crowded = translateOps([diagram('d', 'row', 3)], [wall], CTX)
-    expect(crowded.batch.focus?.ids.length).toBeGreaterThan(0) // had to go beyond the visible area
-    const roomy = translateOps([diagram('d', 'row', 3)], [], CTX)
-    expect(roomy.batch.focus).toBeUndefined()
+  it('frames what was just drawn, and glides to what is highlighted', () => {
+    const drawn = translateOps([diagram('d', 'row', 3)], [], CTX)
+    expect(drawn.batch.focus).toMatchObject({ mode: 'frame' })
+    expect(drawn.batch.focus?.ids).toContain('echo:d_n1')
+    const board = mergeBatch([], drawn.batch)
+    const lit = translateOps([{ op: 'highlight', targets: ['d_n2'] }], board, CTX)
+    expect(lit.batch.focus).toMatchObject({ ids: ['echo:d_n2'], mode: 'pan' })
+    // ...keeping the rest of its diagram in view where it fits.
+    expect(lit.batch.focus?.context).toContain('echo:d_n0')
+    // Drawing and highlighting in one batch: the addition is shown (with the diagram it extends), not the highlight.
+    const both = translateOps([{ op: 'add', diagram: 'd', near: 'd_n2', nodes: [{ id: 'extra', label: 'Extra' }] }, { op: 'highlight', targets: ['d_n0'] }], board, CTX)
+    expect(both.batch.focus?.mode).toBe('pan')
+    for (const id of ['echo:extra', 'echo:d_n0', 'echo:d_n2']) expect(both.batch.focus?.ids).toContain(id)
+    expect(both.batch.focus?.ids.some((id) => id.startsWith('echo:hl_'))).toBe(false)
+  })
+
+  it('removes a node together with its shadow and its highlight', () => {
+    const first = translateOps([diagram('d', 'row', 3)], [], CTX)
+    let board = mergeBatch([], first.batch)
+    board = mergeBatch(board, translateOps([{ op: 'highlight', targets: ['d_n1'] }], board, CTX).batch)
+    const r = translateOps([{ op: 'remove', ids: ['d_n1'] }], board, CTX)
+    for (const id of ['echo:d_n1', 'echo:d_n1__shadow', 'echo:hl_d_n1', 'echo:hl_d_n1__glow']) expect(r.batch.remove).toContain(id)
   })
 
   it('removes an edge label together with its edge', () => {
