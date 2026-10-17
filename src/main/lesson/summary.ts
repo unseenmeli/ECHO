@@ -8,10 +8,12 @@ import { USER_REF, World, eid } from './world'
 
 export interface BlockSummary {
   id: string
-  kind: 'diagram' | 'chart' | 'table' | 'timeline' | 'code' | 'other'
+  kind: 'diagram' | 'chart' | 'table' | 'timeline' | 'code' | 'image' | 'other'
   title?: string
   /** Code cards: the source as numbered lines, and what the learner's last Run printed. */
   code?: { language: string; lines: string[]; output?: string }
+  /** Pictures: what the found file actually is (its own title), which may differ from what was asked for. */
+  picture?: string
   nodes: Array<{ id: string; label: string; detail?: string }>
   edges: Array<{ from: string; to: string; label?: string }>
   bbox: Rect
@@ -58,7 +60,11 @@ export function summarizeBoard(elements: BoardElement[], viewport: { scrollX: nu
       byBlock.set(m.block, b)
     }
     b.bbox = union([b.bbox, el.rect])!
-    if (m.kind === 'code') {
+    if (m.kind === 'image') {
+      b.kind = 'image'
+      b.title = m.label ?? b.title
+      b.picture = m.detail
+    } else if (m.kind === 'code') {
       b.kind = 'code'
       b.code = { language: m.language ?? 'other', lines: (m.code ?? '').split('\n'), ...(b.code?.output ? { output: b.code.output } : {}) }
     } else if (m.id === `${m.block}__out_text` && el.text && el.echo?.detail === 'ran') {
@@ -114,6 +120,7 @@ export function describeBoardForTutor(summary: BoardSummary, selection: Selectio
   if (!summary.blocks.length && !summary.userCount) lines.push('The whiteboard is empty.')
   for (const b of summary.blocks) {
     const parts = [`${b.kind} id=${b.id}${b.title ? ` "${b.title}"` : ''}`]
+    if (b.picture) parts.push(`picture placed: "${b.picture}" (from its file title; you have not seen the image itself)`)
     if (b.code) {
       parts[0] += ` (${b.code.language}; highlight line n as ${b.id}__l<n>)`
       parts.push(`lines: ${b.code.lines.map((l, i) => `${i + 1}: ${l.trimEnd().slice(0, 70)}`).join(' / ')}`)

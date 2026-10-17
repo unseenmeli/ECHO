@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PhraseChunker, sanitizeForSpeech } from '../src/main/voice/chunker'
+import { normalizeForSpeech, PhraseChunker, sanitizeForSpeech } from '../src/main/voice/chunker'
 import { EchoGuard } from '../src/main/voice/echoGuard'
 import { ConversationHistory } from '../src/main/voice/history'
 import {
@@ -68,6 +68,43 @@ describe('PhraseChunker', () => {
 
   it('emits nothing for an empty response', () => {
     expect(new PhraseChunker().end()).toEqual([])
+  })
+
+  it('does not voice a very short opener on its own', () => {
+    const c = new PhraseChunker()
+    const out = [...c.push('Sure. '), ...c.push('A loop repeats a block of code until a condition is met. '), ...c.end()]
+    expect(out[0]).toEqual({ text: 'Sure. A loop repeats a block of code until a condition is met.', flush: true })
+  })
+
+  it('never ends a sentence at e.g., i.e. or an abbreviation followed by lowercase', () => {
+    const c = new PhraseChunker()
+    const out = [...c.push('Some languages, e.g. Python and Ruby, are interpreted at runtime by default. '), ...c.push('approx. ten times slower. '), ...c.end()]
+    expect(out[0].text).toBe('Some languages, e.g. Python and Ruby, are interpreted at runtime by default.')
+    const d = new PhraseChunker()
+    const out2 = [...d.push('It takes approx. ten seconds to warm up the whole cache layer. '), ...d.end()]
+    expect(out2[0].text).toBe('It takes approx. ten seconds to warm up the whole cache layer.')
+  })
+
+  it('groups later sentences into larger units so intonation flows', () => {
+    const c = new PhraseChunker()
+    const sentences = Array.from({ length: 8 }, (_, i) => `This is sentence number ${i + 1} of the explanation. `)
+    const out = [...sentences.flatMap((t) => c.push(t)), ...c.end()]
+    // 8 sentences of ~45 chars: the first piece, then groups of about five, never one flush per sentence.
+    expect(out.filter((p) => p.flush).length).toBeLessThanOrEqual(3)
+  })
+})
+
+describe('normalizeForSpeech', () => {
+  it('says shorthand the way a speaker would', () => {
+    expect(normalizeForSpeech('Use a list, e.g. [1, 2], i.e. ordered data.')).toBe('Use a list, for example, [1, 2], that is, ordered data.')
+    expect(normalizeForSpeech('Speed rose ~40% in 2019–2021 vs. before.')).toBe('Speed rose about 40 percent in 2019 to 2021 versus before.')
+    expect(normalizeForSpeech('Input → output & logs')).toBe('Input to output and logs')
+  })
+
+  it('turns dashes and brackets into spoken pauses', () => {
+    expect(normalizeForSpeech('The CPU (the processor) runs code — fast.')).toBe('The CPU, the processor, runs code, fast.')
+    expect(normalizeForSpeech('It is cheap - but slow.')).toBe('It is cheap, but slow.')
+    expect(normalizeForSpeech('A well-known self-taught coder')).toBe('A well-known self-taught coder')
   })
 })
 

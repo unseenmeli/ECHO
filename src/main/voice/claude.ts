@@ -90,15 +90,16 @@ export function withImage(messages: ChatMessage[], image?: ScreenImage): Anthrop
   return toApiMessages(messages, image)
 }
 
-type ServerTool = 'web_search' | 'code_execution'
+type ServerTool = 'web_search' | 'web_fetch' | 'code_execution'
 
 function classify(err: unknown): ChatError {
   // A key that works but may not use a server tool (not enabled for the organization) is not a bad key.
   if (
     (err instanceof Anthropic.BadRequestError || err instanceof Anthropic.PermissionDeniedError) &&
-    /web[_\s-]?search|code[_\s-]?execution/i.test(err.message)
+    /web[_\s-]?(?:search|fetch)|code[_\s-]?execution/i.test(err.message)
   ) {
-    return new ChatError('tool-unavailable', /code[_\s-]?execution/i.test(err.message) ? 'code_execution' : 'web_search')
+    const tool: ServerTool = /code[_\s-]?execution/i.test(err.message) ? 'code_execution' : /web[_\s-]?fetch/i.test(err.message) ? 'web_fetch' : 'web_search'
+    return new ChatError('tool-unavailable', tool)
   }
   if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
     return new ChatError('auth', 'Anthropic rejected the API key (check ANTHROPIC_API_KEY).')
@@ -130,7 +131,7 @@ const MAX_PAUSED_CONTINUATIONS = 3
 const DYNAMIC_SEARCH_MODELS = /^claude-(?:opus-(?:5|4-[6-8])|sonnet-(?:5|4-6)|fable-5)/
 
 function emptyResult(model: string): ChatResult {
-  return { model, stopReason: null, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, searches: 0 }, sources: [], searchErrors: [], codeRuns: 0 }
+  return { model, stopReason: null, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, searches: 0, fetches: 0 }, sources: [], searchErrors: [], fetchErrors: [], codeRuns: 0 }
 }
 
 /** Sources, failures and usage from one response, added to what earlier passes of the same turn found. */
@@ -143,14 +144,28 @@ function collect(result: ChatResult, msg: Anthropic.Message): void {
   result.usage.cacheRead += u.cache_read_input_tokens ?? 0
   result.usage.cacheWrite += u.cache_creation_input_tokens ?? 0
   result.usage.searches += u.server_tool_use?.web_search_requests ?? 0
+  result.usage.fetches += u.server_tool_use?.web_fetch_requests ?? 0
   const add = (title: string | null, url: string, cited: boolean): void => {
     const known = result.sources.find((s) => s.url === url)
     if (known) known.cited ||= cited
     else result.sources.push({ title: (title || new URL(url).hostname).slice(0, 120), url, cited })
   }
+  // Pages read in full with web_fetch, by document title, so citations of them can be credited to their URL.
+  const fetched = new Map<string, string>()
+  for (const block of msg.content) {
+    if (block.type !== 'web_fetch_tool_result') continue
+    if (block.content.type === 'web_fetch_result') {
+      const title = block.content.content.title
+      if (title) fetched.set(title, block.content.url)
+      add(title, block.content.url, false)
+    } else result.fetchErrors.push(block.content.error_code)
+  }
   for (const block of msg.content) {
     if (block.type === 'text') {
-      for (const c of block.citations ?? []) if (c.type === 'web_search_result_location') add(c.title, c.url, true)
+      for (const c of block.citations ?? []) {
+        if (c.type === 'web_search_result_location') add(c.title, c.url, true)
+        else if (c.type === 'char_location' && c.document_title && fetched.has(c.document_title)) add(c.document_title, fetched.get(c.document_title)!, true)
+      }
     } else if (block.type === 'web_search_tool_result') {
       if (Array.isArray(block.content)) for (const r of block.content.slice(0, 3)) add(r.title, r.url, false)
       else result.searchErrors.push(block.content.error_code)
@@ -190,7 +205,7 @@ export class ClaudeChat implements ChatPort {
   }
 
   async stream(req: ChatRequest): Promise<void> {
-    const model = req.deep ? this.cfg.deepModel : this.cfg.claudeModel
+    const model = req.deep ? this.cfg.deepModel : req.tier === 'strong' ? this.cfg.strongModel : this.cfg.claudeModel
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
         return await this.streamOnce(req, model)
@@ -219,6 +234,11 @@ export class ClaudeChat implements ChatPort {
           ? { type: 'web_search_20260209', name: 'web_search', max_uses: req.webSearch.maxUses }
           : { type: 'web_search_20250305', name: 'web_search', max_uses: req.webSearch.maxUses }
       )
+    }
+    // Reading a whole page only makes sense next to search: web_fetch can only open URLs already in the conversation.
+    if (search && req.webFetch && !this.unavailable.has('web_fetch')) {
+      const fetch = { name: 'web_fetch' as const, max_uses: req.webFetch.maxUses, max_content_tokens: req.webFetch.maxContentTokens, citations: { enabled: true } }
+      tools.push(dynamic ? { type: 'web_fetch_20260209', ...fetch } : { type: 'web_fetch_20250910', ...fetch })
     }
     if (req.codeExecution && !dynamic && !this.unavailable.has('code_execution')) {
       tools.push({ type: 'code_execution_20260521', name: 'code_execution' })
@@ -286,6 +306,7 @@ export class ClaudeChat implements ChatPort {
         if (req.signal.aborted || event.type !== 'content_block_start') return
         const block = event.content_block
         if (block.type === 'server_tool_use' && block.name === 'web_search') req.onSearchStart?.()
+        if (block.type === 'server_tool_use' && block.name === 'web_fetch') req.onFetchStart?.()
         // Text before and after a tool call arrives as separate blocks: keep the sentences apart when spoken.
         if (block.type === 'text' && lastChar && !/\s/.test(lastChar)) {
           req.onText(' ')
@@ -312,7 +333,7 @@ export class ClaudeChat implements ChatPort {
       // Ids, counts and token usage only: never message text, screen content or keys.
       const u = result.usage
       this.log(
-        `[claude] model ${params.model}→${result.model} stop=${result.stopReason} in=${u.input} out=${u.output} cache_read=${u.cacheRead} cache_write=${u.cacheWrite} searches=${u.searches}${result.searchErrors.length ? ` search_errors=${result.searchErrors.join(',')}` : ''} code_runs=${result.codeRuns} sources=${result.sources.length}`
+        `[claude] model ${params.model}→${result.model} stop=${result.stopReason} in=${u.input} out=${u.output} cache_read=${u.cacheRead} cache_write=${u.cacheWrite} searches=${u.searches}${result.searchErrors.length ? ` search_errors=${result.searchErrors.join(',')}` : ''} fetches=${u.fetches}${result.fetchErrors.length ? ` fetch_errors=${result.fetchErrors.join(',')}` : ''} code_runs=${result.codeRuns} sources=${result.sources.length}`
       )
     }
     req.onResult?.(result)

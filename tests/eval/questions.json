@@ -1,0 +1,16 @@
+[
+  { "id": "cpu-acronym", "category": "quick fact", "turns": [{ "say": "What does CPU stand for?" }], "expect": { "tier": "fast", "mentions": ["central processing unit"], "maxWords": 60 } },
+  { "id": "hash-map", "category": "concept", "turns": [{ "say": "How does a hash map work?" }], "expect": { "mentions": ["hash"], "maxWords": 140 } },
+  { "id": "stack-overflow", "category": "hard, short", "turns": [{ "say": "Why is my recursive function causing a stack overflow?" }], "expect": { "tier": "strong", "mentions": ["base case|stop|terminat"] } },
+  { "id": "tcp-udp", "category": "comparison", "turns": [{ "say": "What's the difference between TCP and UDP?" }], "expect": { "tier": "strong", "mentions": ["TCP", "UDP"] } },
+  { "id": "compound-interest", "category": "calculation", "turns": [{ "say": "If I invest 1000 dollars at 5 percent compounded yearly, how much do I have after 10 years?" }], "expect": { "tier": "strong", "mentions": ["1,?628|sixteen hundred (and )?twenty[- ]eight"] } },
+  { "id": "python-version", "category": "recency (search)", "turns": [{ "say": "What is the latest stable version of Python right now?" }], "expect": { "cites": true, "mentions": ["python 3\\.\\d+|three point"] } },
+  { "id": "walrus-docs", "category": "docs detail (page reading)", "turns": [{ "say": "According to the official Python documentation, what exactly does the walrus operator do?" }], "expect": { "cites": true, "mentions": ["assign"] } },
+  { "id": "misheard-cache", "category": "misheard word", "turns": [{ "say": "How does a CPU cash work?", "unsure": [["cash", 0.35]] }], "expect": { "mentions": ["cache"] } },
+  { "id": "dangling-this", "category": "ambiguous reference", "turns": [{ "say": "What is this?" }], "expect": { "asksBack": true, "maxWords": 45 } },
+  { "id": "still-confused", "category": "repair", "turns": [{ "say": "What is recursion?" }, { "say": "I still don't get it." }], "expect": { "tier": "strong" } },
+  { "id": "follow-up", "category": "follow-up", "turns": [{ "say": "What is photosynthesis?" }, { "say": "And where in the cell does it happen?" }], "expect": { "mentions": ["chloroplast"] } },
+  { "id": "notes-mitochondria", "category": "study material", "study": ["material/cell-biology-notes.md"], "turns": [{ "say": "What do my notes say mitochondria do?" }], "expect": { "mentions": ["ATP", "notes"] } },
+  { "id": "notes-missing", "category": "study material (not covered)", "study": ["material/cell-biology-notes.md"], "turns": [{ "say": "What do my notes say about the nucleus?" }], "expect": { "mentions": ["(don't|do not|doesn't|does not|didn't|no) .{0,40}(cover|mention|say|include|cover)|not (in|covered)"] } },
+  { "id": "long-explanation", "category": "rhythm (listen)", "turns": [{ "say": "Can you explain how my browser gets a web page when I type an address?" }], "expect": { "mentions": ["DNS|server"] } }
+]

@@ -10,6 +10,8 @@ export interface TurnInfo {
   event: TurnEventName
   turnIndex: number
   transcript: string
+  /** Per-word recognition confidence (0-1), when the recognizer reports it. */
+  words?: Array<{ word: string; confidence: number }>
 }
 
 export type LinkStatus =
@@ -74,10 +76,12 @@ export interface ChatResult {
   /** The model id the API reports having used (compare with the one requested). */
   model: string
   stopReason: string | null
-  usage: { input: number; output: number; cacheRead: number; cacheWrite: number; searches: number }
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number; searches: number; fetches: number }
   sources: SourceLink[]
   /** Error codes from web searches that failed (the reply continued without them). */
   searchErrors: string[]
+  /** Error codes from pages that could not be read (url_not_accessible, too_many_requests, ...). */
+  fetchErrors: string[]
   codeRuns: number
 }
 
@@ -100,6 +104,9 @@ export interface ChatRequest {
   webSearch?: { maxUses: number }
   /** The model has started a web search (a quick answer may go quiet for a few seconds until it finishes). */
   onSearchStart?(): void
+  /** Also let it read whole pages (from the search results or links the learner gave), at most this many. */
+  webFetch?: { maxUses: number; maxContentTokens: number }
+  onFetchStart?(): void
   tools?: ChatTool[]
   /** Called once per tool the model called, after its reply has finished streaming. */
   onToolUse?(call: ToolCall): void
@@ -107,6 +114,8 @@ export interface ChatRequest {
   maxTokens?: number
   /** Use the deep-dive model for this request. */
   deep?: boolean
+  /** Not a deep dive, but a hard question: 'strong' uses the strong model. Default 'fast'. */
+  tier?: 'fast' | 'strong'
   messages: ChatMessage[]
   /** Screenshot for this turn only; attached to the latest user message, never stored in history. */
   image?: ScreenImage
@@ -118,7 +127,7 @@ export interface ChatPort {
   stream(req: ChatRequest): Promise<void>
 }
 
-/** 'tool-unavailable': the API refused a server tool (web search / code execution not enabled); retry without it. */
+/** 'tool-unavailable': the API refused a server tool (web search / fetch / code execution not enabled); retry without it. */
 export type ChatErrorKind = 'auth' | 'rate-limit' | 'network' | 'tool-unavailable' | 'other'
 
 export class ChatError extends Error {

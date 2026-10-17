@@ -17,6 +17,7 @@ import {
   type SizedNode
 } from './layout'
 import { RUNNABLE_LANGUAGES, type EdgeSpecT, type NodeSpecT, type VisualOp } from './ops'
+import type { Picture } from './pictures'
 import type { DataSeries } from './types'
 import { USER_REF, World, eid, type EchoMeta } from './world'
 
@@ -54,6 +55,8 @@ export interface TranslateContext {
   /** The segment moved to an unrelated topic: put the first new block in a fresh region. */
   newTopic: boolean
   viewport: { scrollX: number; scrollY: number; zoom: number; width?: number; height?: number }
+  /** Pictures found for this lesson's image ops, by op id (looked up before translating). */
+  pictures?: ReadonlyMap<string, Picture>
 }
 
 export interface TranslateResult {
@@ -729,6 +732,50 @@ function codeOp(d: Draft, op: Extract<VisualOp, { op: 'code' }>): void {
   focusOn(d, ids)
 }
 
+const PICTURE_EDGE = { small: 220, medium: 340, large: 480 } as const
+
+function imageOp(d: Draft, op: Extract<VisualOp, { op: 'image' }>): void {
+  const pic = d.ctx.pictures?.get(op.id)
+  if (!pic) {
+    d.warnings.push(`image "${op.id}" skipped: no picture was found`)
+    return
+  }
+  // Longest side fixed by size; the picture keeps its own proportions.
+  const edge = PICTURE_EDGE[op.size ?? 'medium']
+  const scale = edge / Math.max(pic.width, pic.height)
+  const img = { w: Math.round(pic.width * scale), h: Math.round(pic.height * scale) }
+  const captionLines = op.caption ? wrapText(op.caption, Math.max(14, Math.floor(img.w / (FONT.node * 0.6)))) : []
+  const captionH = captionLines.length ? measure(captionLines, FONT.node).h + 10 : 0
+  const creditText = wrapText(pic.credit, Math.max(20, Math.floor(img.w / (12 * 0.6)))).slice(0, 2).join('\n')
+  const creditH = measure(creditText.split('\n'), 12).h + 6
+  const size = { w: img.w + SHADOW.x, h: img.h + captionH + creditH + SHADOW.y + 8 }
+  const near = op.near ? d.world.resolve(op.near) : undefined
+  const at = near ? findSlotNear(near.rect, size, op.side ?? 'right', d.world.slotObstacles(), 80, d.usable) : findFreeRect(size, d.world.obstacles(), d.usable)
+
+  const rect = { x: at.x, y: at.y, w: img.w, h: img.h }
+  const pm = (id: string): EchoMeta => d.meta({ id, kind: 'part', block: op.id })
+  putShadow(d, op.id, 'rectangle', rect, colorOf('pink').shade, op.id)
+  const meta = d.meta({ id: op.id, kind: 'image', block: op.id, label: op.caption, detail: pic.title })
+  d.put(
+    sk({ type: 'image', id: eid(op.id), x: rect.x, y: rect.y, width: rect.w, height: rect.h, fileId: pic.fileId, status: 'saved', scale: [1, 1], strokeColor: 'transparent', roughness: 0, groupIds: stickerGroup(op.id), customData: { echo: meta } }),
+    rect,
+    meta,
+    op.caption
+  )
+  if (!d.batch.files?.some((f) => f.id === pic.fileId)) (d.batch.files ??= []).push({ id: pic.fileId, dataURL: pic.dataURL, mimeType: pic.mimeType })
+  const ids = [eid(op.id), shadowId(op.id)]
+  let y = rect.y + rect.h + SHADOW.y + 8
+  if (captionLines.length) {
+    textSk(d, eid(`${op.id}__caption`), rect.x, y, captionLines.join('\n'), FONT.node, INK, pm(`${op.id}__caption`), 'left')
+    ids.push(eid(`${op.id}__caption`))
+    y += captionH
+  }
+  textSk(d, eid(`${op.id}__credit`), rect.x, y, creditText, 12, MUTED, pm(`${op.id}__credit`), 'left')
+  ids.push(eid(`${op.id}__credit`))
+  if (near) reveal(d, ids, [near.id])
+  else focusOn(d, ids)
+}
+
 function noteOp(d: Draft, op: Extract<VisualOp, { op: 'note' }>): void {
   const lines = wrapText(op.text, 26)
   const m = measure(lines, FONT.small + 1)
@@ -986,6 +1033,8 @@ export function applyOp(d: Draft, op: VisualOp): void {
       return timelineOp(d, op)
     case 'code':
       return codeOp(d, op)
+    case 'image':
+      return imageOp(d, op)
     case 'note':
       return noteOp(d, op)
     case 'highlight':

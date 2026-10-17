@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, session as electronSession, shell, systemPreferences } from 'electron'
 import { board, isBoardOpen } from '../board'
+import { CommonsPictures } from '../lesson/pictures'
 import { ClaudeChat } from './claude'
 import { loadEnvFiles, readVoiceConfig } from './config'
 import { DeepgramTts } from './tts'
@@ -9,6 +10,7 @@ import { screenVoiceContext } from './screenProvider'
 import type { EnginePort } from './ports'
 import { VoiceSession } from './session'
 import type { PreferenceStore } from '../memory/preferenceStore'
+import type { StudyMaterialPort } from '../study/studyMaterial'
 import {
   IDLE_SNAPSHOT,
   isOpenableUrl,
@@ -37,6 +39,9 @@ class VoiceHost {
   private openLesson: (timeoutMs: number) => Promise<boolean> = async () => false
   private closeLesson: () => void = () => {}
   private preferences: PreferenceStore | null = null
+  private study: StudyMaterialPort | null = null
+  /** Kept across conversations, so a picture found once is not downloaded again. */
+  private pictures: CommonsPictures | null = null
 
   // --- EnginePort ---------------------------------------------------------------------
   private readonly enginePort: EnginePort = {
@@ -62,8 +67,10 @@ class VoiceHost {
       openLesson?(timeoutMs: number): Promise<boolean>
       closeLesson?(): void
       preferences?: PreferenceStore
+      study?: StudyMaterialPort
     } = {}
   ): void {
+    if (options.study) this.study = options.study
     if (options.canCaptureScreen) this.canCaptureScreen = options.canCaptureScreen
     if (options.openLesson) this.openLesson = options.openLesson
     if (options.closeLesson) this.closeLesson = options.closeLesson
@@ -216,9 +223,11 @@ class VoiceHost {
         available: () => cfg.visualsEnabled && isBoardOpen(),
         board: () => (isBoardOpen() ? board : null),
         open: (timeoutMs) => (cfg.visualsEnabled ? this.openLesson(timeoutMs) : Promise.resolve(false)),
-        close: () => this.closeLesson()
+        close: () => this.closeLesson(),
+        ...(cfg.picturesEnabled ? { pictures: (this.pictures ??= new CommonsPictures()) } : {})
       },
       ...(this.preferences ? { preferences: this.preferences } : {}),
+      ...(this.study ? { study: this.study } : {}),
       contextProvider: screenVoiceContext,
       emit: (e) => this.broadcast(e),
       log: (m) => console.log(m)

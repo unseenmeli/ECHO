@@ -22,15 +22,54 @@ export interface ChunkerOptions {
   maxChars: number
 }
 
+// Each flush is voiced as one unit, so its intonation starts fresh. A very short first piece ("Sure.") followed by
+// a pause, or small groups later, is what makes speech sound like disconnected sentences. The first piece is a full
+// clause or two (~40 chars costs a fraction of a second of generation), later ones are two or three sentences.
 export const DEFAULT_CHUNKER: ChunkerOptions = {
-  firstMinChars: 18,
-  firstClauseChars: 70,
-  groupMinChars: 140,
+  firstMinChars: 40,
+  firstClauseChars: 110,
+  groupMinChars: 220,
   maxChars: 400
 }
 
 const SENTENCE_END = /[.!?…]+["'”’)\]]*(?=\s)/g
 const CLAUSE_END = /[,;:—–](?=\s)/g
+/** A period after one of these is not the end of a sentence when lowercase text (or a number) follows. */
+const ABBREVIATION = /(?:^|[\s(])(?:e\.g|i\.e|vs|etc|approx|ca|cf|dr|mr|mrs|ms|prof|st|no|fig|vol|a\.m|p\.m|u\.s|[a-z])\.$/i
+/** Never a sentence end, whatever follows ("e.g. Python" is still mid-sentence). */
+const ALWAYS_ABBREVIATION = /(?:^|[\s(])(?:e\.g|i\.e|vs|cf)\.$/i
+
+function isSentenceEnd(buf: string, end: number): boolean {
+  const before = buf.slice(Math.max(0, end - 8), end)
+  if (!/\.["'”’)\]]*$/.test(before)) return true // ! ? … always end a sentence
+  if (ALWAYS_ABBREVIATION.test(before)) return false
+  if (!ABBREVIATION.test(before)) return true
+  const next = buf.slice(end).trimStart().charAt(0)
+  return !!next && /[A-Z"“‘']/.test(next)
+}
+
+/**
+ * Rewrites written shorthand into what a speaker would say, for the voice only (the transcript keeps the original):
+ * abbreviations, symbols, and dashes or brackets, which TTS otherwise reads with no pause or an odd one.
+ */
+export function normalizeForSpeech(text: string): string {
+  return text
+    .replace(/(^|[\s(])e\.g\.,?(?=\s|$)/gi, '$1for example,')
+    .replace(/(^|[\s(])i\.e\.,?(?=\s|$)/gi, '$1that is,')
+    .replace(/(^|\s)etc\.(?=\s|$)/gi, '$1and so on.')
+    .replace(/(^|\s)vs\.?(?=\s)/gi, '$1versus')
+    .replace(/(\d)\s*[–—-]\s*(\d)/g, '$1 to $2')
+    .replace(/(\d)\s*%/g, '$1 percent')
+    .replace(/~\s*(?=\d)/g, 'about ')
+    .replace(/\s*(?:->|→|⇒|=>)\s*/g, ' to ')
+    .replace(/\s+&\s+/g, ' and ')
+    .replace(/(\S)\s*[—–]\s*(?=\S)/g, '$1, ')
+    .replace(/\s+-\s+/g, ', ')
+    .replace(/\s*\(([^()]{1,80})\)/g, ', $1,')
+    .replace(/,\s*([.!?;:,])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
 
 /** Removes formatting that sounds wrong when read aloud. */
 export function sanitizeForSpeech(text: string): string {
@@ -103,6 +142,7 @@ export class PhraseChunker {
     let m: RegExpExecArray | null
     while ((m = SENTENCE_END.exec(buf))) {
       const end = m.index + m[0].length
+      if (!isSentenceEnd(buf, end)) continue
       if (sanitizeForSpeech(buf.slice(0, end)).trim().length >= minLen) {
         // The first sentence is flushed at once for low latency; later ones group up.
         return { end, flush: !this.firstDone }

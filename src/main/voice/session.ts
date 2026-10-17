@@ -3,7 +3,7 @@ import { LessonState, LessonTurn, type LessonBoardPort, type TurnIO } from '../l
 import { describeBoardForTutor, summarizeBoard, summarizeSelection } from '../lesson/summary'
 import { LESSON_PROMPT_ADDENDUM, SegmentStreamParser } from '../lesson/tutorProtocol'
 import { selectSkills, skillsPrompt } from '../skills'
-import { PhraseChunker, type Phrase } from './chunker'
+import { DEFAULT_CHUNKER, normalizeForSpeech, PhraseChunker, type Phrase } from './chunker'
 import { buildSystemPrompt, buildTurnContext, preferencesBlock } from './claude'
 import { EchoGuard } from './echoGuard'
 import { ConversationHistory, SUMMARY_SYSTEM, summaryRequest } from './history'
@@ -37,8 +37,12 @@ import {
   type TurnInfo,
   type VoiceContextProvider
 } from './ports'
-import { CODE_EXECUTION_GUIDE, WEB_SEARCH_DEEP_LESSON, WEB_SEARCH_DEEP_VERBAL, WEB_SEARCH_GUIDE, WEB_SEARCH_LESSON } from './research'
+import { chooseModelTier, THINKING_FILLERS, type ModelTier } from './routing'
+import { danglingReferenceNote, misheardNote, unsureWords } from './repair'
+import { CODE_EXECUTION_GUIDE, WEB_FETCH_GUIDE, WEB_SEARCH_DEEP_LESSON, WEB_SEARCH_DEEP_VERBAL, WEB_SEARCH_GUIDE, WEB_SEARCH_LESSON } from './research'
 import type { PreferenceStorePort } from '../memory/preferenceStore'
+import { STUDY_MATERIAL_GUIDE, type StudyMaterialPort } from '../study/studyMaterial'
+import type { PictureLookup } from '../lesson/pictures'
 import { PREFERENCE_TOOL_GUIDE, PREFERENCE_TOOLS, PreferenceTools } from '../memory/preferenceTools'
 import {
   IDLE_SNAPSHOT,
@@ -80,6 +84,8 @@ export interface LessonSupport {
   open?(timeoutMs: number): Promise<boolean>
   /** Close the lesson window. */
   close?(): void
+  /** Finds real pictures for the whiteboard (image ops). */
+  pictures?: PictureLookup
 }
 
 /** How many learner turns a practice activity keeps check-understanding loaded unless it is ended sooner. */
@@ -97,6 +103,8 @@ export interface SessionDeps {
   lesson?: LessonSupport
   /** Saved user preferences: supplied to the model on every request, and written through its tools. */
   preferences?: PreferenceStorePort
+  /** The learner's own study material, searched for passages related to each question. */
+  study?: StudyMaterialPort
   log?(message: string): void
 }
 
@@ -105,6 +113,8 @@ interface SubmitOptions {
   forceDeep?: boolean
   /** Answer with this exact line instead of asking the model (acknowledging a saved preference). */
   localText?: string
+  /** Words speech recognition was unsure of, so the model can check before answering the wrong question. */
+  unsure?: string[]
 }
 
 interface Segment {
@@ -127,6 +137,12 @@ interface Reply {
   filler: string | null
   /** The learner asked for depth: open the whiteboard and teach a full lesson. */
   deep: boolean
+  /** Which model answers when this isn't a deep dive: the fast one, or the strong one for a hard question. */
+  tier: ModelTier
+  /** Words of the question speech recognition was unsure of. */
+  unsure: string[]
+  /** There were earlier turns when this question was asked (something "this" could refer to). */
+  hadHistory: boolean
   /** Part of a practice or checkpoint activity the learner asked for. */
   practice: boolean
   /** Web pages the answer drew on, for the transcript. */
@@ -187,8 +203,8 @@ export class VoiceSession {
   private readonly prefTools: PreferenceTools | null
   /** The voice the current speech socket was opened with, to notice a changed preference. */
   private ttsVoice: string | undefined
-  /** A web search is running, so the status line says so. */
-  private searching = false
+  /** A web search or page read is running, so the status line says so. */
+  private searching: 'search' | 'fetch' | false = false
   /** Learner turns left in the current practice activity (0: none running). */
   private practiceTurnsLeft = 0
   /** The background request folding older turns into the conversation summary, if one is running. */
@@ -541,7 +557,9 @@ export class VoiceSession {
     if (this.reply) this.interrupt('new-turn')
     // If ECHO just asked whether to remember something, a short yes/no settles it without another model call.
     const answer = this.prefTools?.resolveProposal(text)
-    this.submit(text, answer ? { localText: answer.spoken } : {})
+    const unsure = unsureWords(info.words, this.deps.config.sttUnsureConfidence)
+    if (unsure.length) this.log(`[voice] speech recognition unsure of: ${unsure.join(', ')}`)
+    this.submit(text, answer ? { localText: answer.spoken } : { unsure })
   }
 
   private confirmTurn(turn: Turn): void {
@@ -577,10 +595,17 @@ export class VoiceSession {
       localText: options.localText ?? null,
       lessonTurn: null,
       abort: new AbortController(),
-      chunker: new PhraseChunker(),
+      chunker: new PhraseChunker({
+        ...DEFAULT_CHUNKER,
+        firstMinChars: this.deps.config.ttsFirstChars,
+        groupMinChars: this.deps.config.ttsGroupChars
+      }),
       fullText: '',
       filler: null,
       deep: !!options.forceDeep,
+      tier: 'fast',
+      unsure: options.unsure ?? [],
+      hadHistory: this.history.toMessages(3).length > 1,
       practice: false,
       sources: [],
       searchFailed: false,
@@ -593,6 +618,11 @@ export class VoiceSession {
       responseDoneSent: false,
       tEndOfTurn: this.now()
     }
+    if (this.deps.config.smartRouting && !reply.deep && !reply.localText) {
+      const route = chooseModelTier({ question, screenShared: !!this.deps.contextProvider?.isWatchingScreen?.() })
+      reply.tier = route.tier
+      this.log(`[voice] model route: ${route.tier} (${route.reasons.join(', ')})`)
+    }
     this.reply = reply
     this.tts?.begin(reply.id)
     this.upsertEntry({ id: reply.id, role: 'assistant', text: '', final: false, spokenChars: 0 })
@@ -604,7 +634,14 @@ export class VoiceSession {
   /** Opening the whiteboard or looking at the screen takes a moment: say so instead of going quiet. */
   private speakFiller(reply: Reply): void {
     const watching = !!this.deps.contextProvider?.isWatchingScreen?.()
-    const fillers = reply.deep && this.canTeachOnBoard() ? DEEP_FILLERS : watching && asksAboutScreen(reply.question) ? SCREEN_FILLERS : null
+    const fillers =
+      reply.deep && this.canTeachOnBoard()
+        ? DEEP_FILLERS
+        : watching && asksAboutScreen(reply.question)
+          ? SCREEN_FILLERS
+          : !reply.deep && reply.tier === 'strong'
+            ? THINKING_FILLERS
+            : null
     if (!fillers) return
     reply.filler = this.lastFiller = pickFiller(this.lastFiller, Math.random, fillers)
     this.speakPhrase(reply, { text: reply.filler, flush: false })
@@ -680,7 +717,7 @@ export class VoiceSession {
    */
   private reasoningFor(reply: Reply, lesson: boolean): Pick<ChatRequest, 'reasoning' | 'effort'> {
     if (reply.deep) return { reasoning: 'adaptive', effort: 'medium' }
-    return { reasoning: 'off', effort: lesson || reply.practice ? 'medium' : 'low' }
+    return { reasoning: 'off', effort: lesson || reply.practice || reply.tier === 'strong' ? 'medium' : 'low' }
   }
 
   /** Sources and failed searches for the transcript; failures are said out loud by the model and shown here too. */
@@ -743,14 +780,22 @@ export class VoiceSession {
    * Web search and code execution for this request: the rules for the system prompt and the request fields that turn
    * the tools on. Deep dives get more searches, since they research before they teach.
    */
-  private research(reply: Reply, lesson: boolean): { guide: string; options: Pick<ChatRequest, 'webSearch' | 'onSearchStart' | 'codeExecution'> } {
+  private research(
+    reply: Reply,
+    lesson: boolean
+  ): { guide: string; options: Pick<ChatRequest, 'webSearch' | 'onSearchStart' | 'webFetch' | 'onFetchStart' | 'codeExecution'> } {
     const cfg = this.deps.config
     const guides: string[] = []
-    const options: Pick<ChatRequest, 'webSearch' | 'onSearchStart' | 'codeExecution'> = {}
+    const options: Pick<ChatRequest, 'webSearch' | 'onSearchStart' | 'webFetch' | 'onFetchStart' | 'codeExecution'> = {}
     if (cfg.webSearchEnabled) {
       guides.push(reply.deep ? (lesson ? WEB_SEARCH_DEEP_LESSON : WEB_SEARCH_DEEP_VERBAL) : lesson ? WEB_SEARCH_LESSON : WEB_SEARCH_GUIDE)
       options.webSearch = { maxUses: reply.deep ? cfg.webSearchDeepMaxUses : cfg.webSearchMaxUses }
-      options.onSearchStart = () => this.setSearching(reply, true)
+      options.onSearchStart = () => this.setSearching(reply, 'search')
+      if (cfg.webFetchEnabled) {
+        guides.push(WEB_FETCH_GUIDE)
+        options.webFetch = { maxUses: reply.deep ? cfg.webFetchDeepMaxUses : cfg.webFetchMaxUses, maxContentTokens: cfg.webFetchMaxTokens }
+        options.onFetchStart = () => this.setSearching(reply, 'fetch')
+      }
     }
     if (cfg.codeExecutionEnabled) {
       guides.push(CODE_EXECUTION_GUIDE)
@@ -766,12 +811,13 @@ export class VoiceSession {
     return skillsPrompt(names)
   }
 
-  /** "Searching the web…" while a search runs, so a quiet moment doesn't look like a hang. */
-  private setSearching(reply: Reply, on: boolean): void {
-    if (this.searching === on || (on && this.reply !== reply)) return
-    this.searching = on
-    this.deps.emit({ type: 'lesson-status', status: { level: 'info', message: on ? 'Searching the web…' : null } })
-    if (on) this.log('[voice] web search started')
+  /** "Searching the web…" / "Reading the page…" while a server tool runs, so a quiet moment doesn't look like a hang. */
+  private setSearching(reply: Reply, what: 'search' | 'fetch' | false): void {
+    if (this.searching === what || (what && this.reply !== reply)) return
+    this.searching = what
+    const message = what === 'search' ? 'Searching the web…' : what === 'fetch' ? 'Reading the page…' : null
+    this.deps.emit({ type: 'lesson-status', status: { level: 'info', message } })
+    if (what) this.log(`[voice] web ${what} started`)
   }
 
   private async runLessonChat(reply: Reply, epoch: number): Promise<void> {
@@ -803,7 +849,8 @@ export class VoiceSession {
       board,
       lesson: this.lessonState,
       question,
-      dialogue: messages.slice(0, -1)
+      dialogue: messages.slice(0, -1),
+      ...(support.pictures ? { pictures: support.pictures } : {})
     })
     reply.lessonTurn = turn
     const parser = new SegmentStreamParser()
@@ -815,13 +862,19 @@ export class VoiceSession {
       if (!alive()) return
       const research = this.research(reply, true)
       const prefs = this.preferenceParts()
+      const study = this.studyParts(reply)
       await this.deps.chat.stream({
-        system: buildSystemPrompt(prefs.guide, LESSON_PROMPT_ADDENDUM, this.skillsFor(reply, true), research.guide),
+        system: buildSystemPrompt(prefs.guide, LESSON_PROMPT_ADDENDUM, this.skillsFor(reply, true), research.guide, study.guide),
         systemTail: prefs.tail,
         // The whiteboard reaches the tutor through <lesson_context>, the screen through <screen_context>.
-        turnContext: buildTurnContext(context, reply.filler, lessonContext),
+        turnContext: buildTurnContext(
+          context,
+          reply.filler,
+          [lessonContext, study.context, this.repairNotes(reply, !!context?.screenImage, true)].filter(Boolean).join('\n\n') || null
+        ),
         maxTokens: Math.max(this.deps.config.claudeMaxTokens, reply.deep ? DEEP_MAX_TOKENS : LESSON_MAX_TOKENS),
         deep: reply.deep,
+        tier: reply.tier,
         ...this.reasoningFor(reply, true),
         ...this.toolsForRequest(),
         ...research.options,
@@ -852,6 +905,32 @@ export class VoiceSession {
     if (!alive()) return
     for (const seg of parser.end()) turn.onTutorSegment(seg)
     turn.onTutorDone()
+  }
+
+  /** Notes for the model when the question may have been misheard, or points at something it can't see. */
+  private repairNotes(reply: Reply, screenShared: boolean, boardOpen: boolean): string | null {
+    const notes = [
+      misheardNote(reply.unsure),
+      danglingReferenceNote(reply.question, { screenShared, boardOpen, hasHistory: reply.hadHistory })
+    ].filter(Boolean)
+    return notes.length ? notes.join('\n\n') : null
+  }
+
+  /** The guide (system prompt) and this turn's passages (turn context) from the learner's study material. */
+  private studyParts(reply: Reply): { guide: string | null; context: string | null } {
+    const study = this.deps.study
+    if (!study?.hasMaterial()) return { guide: null, context: null }
+    // A follow-up ("and the second step?") is searched together with the question before it.
+    const previous = this.history
+      .toMessages(4)
+      .filter((m) => m.role === 'user')
+      .map((m) => m.content)
+      .slice(-2, -1)
+    try {
+      return { guide: STUDY_MATERIAL_GUIDE, context: study.contextFor([reply.question, ...previous].join('\n')) }
+    } catch {
+      return { guide: STUDY_MATERIAL_GUIDE, context: null }
+    }
   }
 
   /** The tutor only knows about the board through this: topic and progress, what is drawn (with ids), the selection. */
@@ -904,11 +983,16 @@ export class VoiceSession {
       if (!alive()) return
       const research = this.research(reply, false)
       const prefs = this.preferenceParts()
+      const study = this.studyParts(reply)
       await this.deps.chat.stream({
-        system: buildSystemPrompt(prefs.guide, this.skillsFor(reply, false), research.guide),
+        system: buildSystemPrompt(prefs.guide, this.skillsFor(reply, false), research.guide, study.guide),
         systemTail: prefs.tail,
-        turnContext: buildTurnContext(context, reply.filler),
-        ...(reply.deep ? { maxTokens: Math.max(this.deps.config.claudeMaxTokens, 1200), deep: true } : {}),
+        turnContext: buildTurnContext(
+          context,
+          reply.filler,
+          [study.context, this.repairNotes(reply, !!context?.screenImage, false)].filter(Boolean).join('\n\n') || null
+        ),
+        ...(reply.deep ? { maxTokens: Math.max(this.deps.config.claudeMaxTokens, 1200), deep: true } : { tier: reply.tier }),
         ...this.reasoningFor(reply, false),
         ...this.toolsForRequest(),
         ...research.options,
@@ -960,8 +1044,10 @@ export class VoiceSession {
     if (phrase.text) {
       reply.fullText += (reply.fullText ? ' ' : '') + phrase.text
       reply.sinceFlush += phrase.text
-      this.echo.noteSpoken(phrase.text, this.now())
-      this.tts?.speak(phrase.text + ' ')
+      // The transcript keeps what was written; the voice gets it as a speaker would say it.
+      const spoken = normalizeForSpeech(phrase.text)
+      this.echo.noteSpoken(spoken, this.now())
+      this.tts?.speak(spoken + ' ')
       this.updateReplyEntry(reply)
     }
     if (phrase.flush) this.flushSegment(reply, false)

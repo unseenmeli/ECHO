@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Excalidraw, MainMenu, WelcomeScreen } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
+import type { BinaryFiles } from '@excalidraw/excalidraw/types'
 import '@excalidraw/excalidraw/index.css'
 import type { BoardApi, SavedBoard } from '../../../shared/board'
 import { createBoardController } from './boardController'
@@ -21,6 +22,8 @@ export function TutorWindow() {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
   const saveTimer = useRef(0)
   const pending = useRef<SavedBoard | null>(null)
+  /** File ids last sent for saving: picture data is only re-sent when the set changes. */
+  const savedFileIds = useRef('')
   const boardRef = useRef<HTMLElement>(null)
   const controller = useRef<BoardApi | null>(null)
   const runner = useMemo(createCodeRunner, [])
@@ -58,7 +61,8 @@ export function TutorWindow() {
 
   const onChange = (
     elements: readonly ExcalidrawElement[],
-    state: { scrollX: number; scrollY: number; zoom: { value: number } }
+    state: { scrollX: number; scrollY: number; zoom: { value: number } },
+    files: BinaryFiles
   ): void => {
     // The dot-paper texture sits behind a transparent canvas; keep it pinned
     // to the scene so it pans and zooms with the drawing.
@@ -74,9 +78,18 @@ export function TutorWindow() {
     const cards = findCodeCards(elements, { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value })
     setCodeCards((prev) => (JSON.stringify(prev) === JSON.stringify(cards) ? prev : cards))
 
+    const live = elements.filter((e) => !e.isDeleted)
+    // Only the pictures still on the board, and only when that set changed (the main process keeps the last one).
+    const used = [...new Set(live.flatMap((e) => (e.type === 'image' && e.fileId && files[e.fileId] ? [e.fileId] : [])))].sort()
+    const usedKey = used.join(',')
+    const filesChanged = usedKey !== savedFileIds.current
+    savedFileIds.current = usedKey
     pending.current = {
-      elements: JSON.parse(JSON.stringify(elements.filter((e) => !e.isDeleted))),
-      viewport: { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value }
+      elements: JSON.parse(JSON.stringify(live)),
+      viewport: { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value },
+      ...(filesChanged || pending.current?.files
+        ? { files: Object.fromEntries(used.map((id) => [id, { id, dataURL: files[id].dataURL, mimeType: files[id].mimeType, created: files[id].created }])) }
+        : {})
     }
     window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(flush, SAVE_DELAY_MS)
@@ -115,6 +128,7 @@ export function TutorWindow() {
             theme="light"
             initialData={{
               elements: (initial?.elements ?? []) as unknown as ExcalidrawElement[],
+              files: (initial?.files ?? {}) as unknown as BinaryFiles,
               appState: {
                 viewBackgroundColor: 'transparent',
                 ...(initial && {

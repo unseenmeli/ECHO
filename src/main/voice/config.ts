@@ -14,6 +14,10 @@ export interface VoiceConfig {
   claudeModel: string
   /** Model for deep-dive lessons, where depth matters more than the first word arriving fast. */
   deepModel: string
+  /** Model for short questions that need real reasoning (debugging, comparisons, maths, "I still don't get it"). */
+  strongModel: string
+  /** Send hard questions to strongModel even when nobody asked for a deep dive. */
+  smartRouting: boolean
   claudeMaxTokens: number
   /** Thinking adds latency before the first spoken word; turn it off where the model allows it. */
   claudeDisableThinking: boolean
@@ -28,8 +32,13 @@ export interface VoiceConfig {
   eagerEotThreshold: number | null
   /** Silence after which a turn is force-ended (500–60000). */
   eotTimeoutMs: number
+  /** Words recognized with less confidence than this are flagged to the model as possibly misheard (0 = off). */
+  sttUnsureConfidence: number
 
   ttsVoice: string
+  /** Characters the first spoken piece waits for, and the size of later groups (each group is voiced as one unit). */
+  ttsFirstChars: number
+  ttsGroupChars: number
 
   /**
    * Speech (ms) the local VAD must hear while ECHO talks before ECHO stops, even if
@@ -44,12 +53,21 @@ export interface VoiceConfig {
 
   /** Whiteboard visuals alongside the spoken lesson (needs the lesson window open). */
   visualsEnabled: boolean
+  /** Let the whiteboard show real pictures, looked up on Wikimedia Commons. */
+  picturesEnabled: boolean
 
   /** Let ECHO search the web (Anthropic's server-side web search tool) for facts it should not answer from memory. */
   webSearchEnabled: boolean
   /** Most searches in one quick answer, and in one deep dive (which researches before it teaches). */
   webSearchMaxUses: number
   webSearchDeepMaxUses: number
+  /** Let ECHO read whole pages from its search results (Anthropic's web fetch tool) instead of answering from snippets. */
+  webFetchEnabled: boolean
+  /** Most pages read in a quick answer, and in a deep dive. */
+  webFetchMaxUses: number
+  webFetchDeepMaxUses: number
+  /** Longest page text (tokens) the model reads from one page; longer pages are cut. */
+  webFetchMaxTokens: number
   /** Offer Anthropic's hosted code execution (on Anthropic's servers) for checking calculations and examples. */
   codeExecutionEnabled: boolean
 }
@@ -103,6 +121,8 @@ export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigRes
       deepgramApiKey,
       claudeModel: env.ECHO_CLAUDE_MODEL?.trim() || 'claude-haiku-5-5',
       deepModel: env.ECHO_DEEP_MODEL?.trim() || 'claude-sonnet-5-5',
+      strongModel: env.ECHO_STRONG_MODEL?.trim() || env.ECHO_DEEP_MODEL?.trim() || 'claude-sonnet-5-5',
+      smartRouting: bool(env.ECHO_SMART_ROUTING, true),
       claudeMaxTokens: num(env.ECHO_CLAUDE_MAX_TOKENS, 400, 50, 4000),
       claudeDisableThinking: bool(env.ECHO_CLAUDE_DISABLE_THINKING, true),
       historyMessages: num(env.ECHO_HISTORY_MESSAGES, 24, 2, 200),
@@ -110,14 +130,22 @@ export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigRes
       eotThreshold: num(env.ECHO_EOT_THRESHOLD, 0.8, 0.5, 1),
       eagerEotThreshold: eager ? num(eager, 0.5, 0.3, 0.9) : null,
       eotTimeoutMs: num(env.ECHO_EOT_TIMEOUT_MS, 4000, 500, 60000),
+      sttUnsureConfidence: num(env.ECHO_STT_UNSURE_CONFIDENCE, 0.6, 0, 1),
       bargeInMs: env.ECHO_BARGE_IN_MS?.trim() === '0' ? 0 : num(env.ECHO_BARGE_IN_MS, 450, 150, 3000),
       ttsVoice: env.ECHO_TTS_VOICE?.trim() || 'aura-2-thalia-en',
+      ttsFirstChars: num(env.ECHO_TTS_FIRST_CHARS, 40, 10, 200),
+      ttsGroupChars: num(env.ECHO_TTS_GROUP_CHARS, 220, 60, 1200),
       deepgramBase: (env.ECHO_DEEPGRAM_WS_BASE?.trim() || 'wss://api.deepgram.com').replace(/\/+$/, ''),
       logMetrics: bool(env.ECHO_LOG_METRICS, true),
       visualsEnabled: bool(env.ECHO_VISUALS, true),
+      picturesEnabled: bool(env.ECHO_PICTURES, true),
       webSearchEnabled: bool(env.ECHO_WEB_SEARCH, true),
       webSearchMaxUses: num(env.ECHO_WEB_SEARCH_MAX_USES, 2, 1, 10),
       webSearchDeepMaxUses: num(env.ECHO_WEB_SEARCH_DEEP_MAX_USES, 5, 1, 15),
+      webFetchEnabled: bool(env.ECHO_WEB_FETCH, true),
+      webFetchMaxUses: num(env.ECHO_WEB_FETCH_MAX_USES, 1, 1, 5),
+      webFetchDeepMaxUses: num(env.ECHO_WEB_FETCH_DEEP_MAX_USES, 3, 1, 10),
+      webFetchMaxTokens: num(env.ECHO_WEB_FETCH_MAX_TOKENS, 8000, 1000, 50000),
       codeExecutionEnabled: bool(env.ECHO_CODE_EXECUTION, true),
     }
   }

@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, nativeTheme, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen, shell } from 'electron'
 import { attachBoardHost, registerBoardIpc, whenBoardReady } from './board'
 import { attachScreenHost, registerScreenIpc, screenContext } from './screenContext'
 import { createTray } from './tray'
@@ -8,6 +8,7 @@ import windowIconPath from '../../resources/icon.png?asset'
 import { voiceHost } from './voice/host'
 import { registerPreferenceIpc } from './memory/preferenceIpc'
 import { PreferenceStore } from './memory/preferenceStore'
+import { STUDY_EXTENSIONS, StudyMaterial } from './study/studyMaterial'
 import { openPreferencesWindow, preferencesWindow } from './preferencesWindow'
 
 const COMPANION_WIDTH = 150
@@ -193,6 +194,24 @@ function showCompanion(): void {
   else companion.showInactive()
 }
 
+/** Asks for files and adds them, saying how it went (the app has no window that would show it otherwise). */
+async function addStudyMaterial(study: StudyMaterial): Promise<void> {
+  app.focus({ steal: true })
+  const picked = await dialog.showOpenDialog({
+    title: 'Add study material',
+    buttonLabel: 'Add',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'PDF, text or Markdown', extensions: STUDY_EXTENSIONS }]
+  })
+  if (picked.canceled) return
+  const lines: string[] = []
+  for (const path of picked.filePaths) {
+    const r = await study.add(path)
+    lines.push(r.ok ? `${r.file.name}: ${r.file.problem ?? `${r.file.pages} ${r.file.unit}${r.file.pages === 1 ? '' : 's'}, ready`}` : r.message)
+  }
+  if (Notification.isSupported()) new Notification({ title: 'Study material', body: lines.join('\n') }).show()
+}
+
 // Double-launching (e.g. the Windows shortcut) reuses the running companion.
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -211,6 +230,9 @@ if (!app.requestSingleInstanceLock()) {
     registerPreferenceIpc(preferences, () =>
       [companion, lesson, preferencesWindow()].filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
     )
+    // The learner's own study material: which files they added, re-read on launch.
+    const study = new StudyMaterial(join(app.getPath('userData'), 'study-material.json'))
+    void study.load()
     voiceHost.register({
       canCaptureScreen: (wc) => !!companion && !companion.isDestroyed() && wc === companion.webContents,
       openLesson: (timeoutMs) => {
@@ -220,7 +242,8 @@ if (!app.requestSingleInstanceLock()) {
       closeLesson: () => {
         if (lesson && !lesson.isDestroyed()) lesson.close()
       },
-      preferences
+      preferences,
+      study
     })
     companion = createCompanionWindow()
 
@@ -232,6 +255,11 @@ if (!app.requestSingleInstanceLock()) {
       },
       openLesson: openLessonWindow,
       openPreferences: openPreferencesWindow,
+      study: {
+        list: () => study.list(),
+        add: () => void addStudyMaterial(study),
+        remove: (id) => void study.remove(id)
+      },
       screen: {
         state: screenContext.state,
         start: screenContext.requestStart,

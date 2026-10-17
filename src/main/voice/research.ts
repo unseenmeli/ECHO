@@ -9,6 +9,14 @@ You have a web_search tool. Use it to ground what you teach in current, reliable
 - Write focused queries of a few specific words. Prefer official documentation, standards bodies, primary sources and established publications. Where figures matter, check them in more than one source, and say so when sources disagree.
 - Say only what the results support. Name the source of an important figure in a few spoken words ("according to the Python docs"). If a search fails or finds nothing reliable, say so and answer from what you know, marked as such.`
 
+/** Added when the model can also read whole pages. */
+export const WEB_FETCH_GUIDE = `READING PAGES
+
+You also have a web_fetch tool that reads a whole page. It can only open URLs that already appear in the conversation: your search results, or a link the learner gave.
+- Search results are short snippets. When the answer depends on details a snippet can't settle (exact steps, a definition from the docs, a figure and its context, what a specific page or article actually says), fetch the most relevant result and answer from the page itself.
+- Don't fetch when the snippets already answer the question clearly, and fetch the one best page rather than several similar ones.
+- If a page can't be read (blocked, too large, not a web page), say so in a few words and use what you have.`
+
 /** Added to every request that offers web search. */
 export const WEB_SEARCH_GUIDE = `${SHARED}
 - For a quick question, search at most once or twice, and only if needed. Say one short sentence first ("Let me check that.") so the learner isn't left in silence, then search, then answer.`
