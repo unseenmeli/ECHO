@@ -1,0 +1,167 @@
+/* Light translucent grey in both system themes so the pill reads the same
+   over any desktop. */
+:root {
+  --glass-bg: rgba(225, 225, 230, 0.58);
+  --glass-hover: rgba(255, 255, 255, 0.28);
+  --glass-pressed: rgba(0, 0, 0, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.45);
+  --glass-highlight: rgba(255, 255, 255, 0.7);
+  --glass-divider: rgba(0, 0, 0, 0.14);
+  --glyph: #1c1c1e;
+  --shadow: 0 6px 18px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12);
+  --focus-ring: #0a84ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable', 'Segoe UI', system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.companion {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 12px 12px 18px;
+}
+
+/* The character is the drag handle for the whole window. */
+.character {
+  -webkit-app-region: drag;
+  cursor: grab;
+  width: 121px;
+  height: 143px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: idle-float 3.2s ease-in-out infinite;
+}
+
+.character img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.22));
+}
+
+.sprite {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.sprite img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 240ms ease-in-out;
+}
+
+.sprite img.is-active {
+  opacity: 1;
+}
+
+@keyframes idle-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+/* Both buttons share one glass pill, split by a hairline. */
+.controls {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  padding: 3px;
+  border-radius: 999px;
+  border: 0.5px solid var(--glass-border);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow), inset 0 1px 0 var(--glass-highlight);
+}
+
+.controls-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--glass-divider);
+}
+
+.glass-button {
+  -webkit-app-region: no-drag;
+  width: 44px;
+  height: 38px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--glyph);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  outline: none;
+  transition:
+    transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background-color 0.15s ease;
+}
+
+.glass-button:hover {
+  background: var(--glass-hover);
+}
+
+.glass-button:active {
+  transform: scale(0.9);
+  background: var(--glass-pressed);
+  transition-duration: 0.08s;
+}
+
+.glass-button:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.glyph-question {
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1;
+  transform: translateY(-0.5px);
+}
+
+.glyph-chevron {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: translateX(1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .character {
+    animation: none;
+  }
+  .glass-button {
+    transition: background-color 0.15s ease;
+  }
+}
