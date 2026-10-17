@@ -6,7 +6,7 @@ import { ClaudeChat } from './claude'
 import { loadEnvFiles, readVoiceConfig } from './config'
 import { DeepgramTts } from './tts'
 import { deepgramAuthFor } from './backend'
-import { backendUrl, type AccessCodeStore } from '../accessCode'
+import { accessCodeFor, backendUrl, type AccessCodeStore } from '../accessCode'
 import { FluxClient } from './flux'
 import { screenVoiceContext } from './screenProvider'
 import type { EnginePort } from './ports'
@@ -202,11 +202,11 @@ class VoiceHost {
       loadEnvFiles([app.getAppPath(), process.cwd(), app.getPath('userData')])
       this.envLoaded = true
     }
-    // A server address (env, or baked in at build time) switches the app to ECHO's server and its access code.
+    // ECHO's server and its access code (built in, so judges don't have to enter anything; see accessCode.ts).
     const result = readVoiceConfig({
       ...process.env,
       ECHO_BACKEND_URL: backendUrl(),
-      ECHO_ACCESS_CODE: this.access?.get() ?? process.env.ECHO_ACCESS_CODE
+      ECHO_ACCESS_CODE: accessCodeFor(this.access)
     })
     if (!result.ok) {
       this.configError = { ...IDLE_SNAPSHOT, state: 'error', message: result.message }
