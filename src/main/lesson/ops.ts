@@ -91,6 +91,25 @@ const TimelineOp = z
   })
   .describe('Ordered events along a line.')
 
+export const CODE_LANGUAGES = ['python', 'javascript', 'typescript', 'java', 'c', 'cpp', 'csharp', 'go', 'rust', 'sql', 'html', 'css', 'bash', 'other'] as const
+/** Languages the board can run in its sandbox (the card gets a Run button). */
+export const RUNNABLE_LANGUAGES: readonly string[] = ['python', 'javascript']
+
+const CodeOp = z
+  .object({
+    op: z.literal('code'),
+    id: Id,
+    title: Label.optional(),
+    language: z.enum(CODE_LANGUAGES),
+    lines: z
+      .array(z.string().max(80).describe('One line of source, indentation included. No newlines.'))
+      .min(1)
+      .max(24)
+      .describe('The code, one entry per line. Line n can be highlighted as "<id>__l<n>" (1-based).'),
+    new_region: z.boolean().optional()
+  })
+  .describe('A code card with line numbers. Python and JavaScript cards get a Run button for the learner.')
+
 const NoteOp = z
   .object({
     op: z.literal('note'),
@@ -143,6 +162,7 @@ export const VisualOpSchema = z.discriminatedUnion('op', [
   ChartOp,
   TableOp,
   TimelineOp,
+  CodeOp,
   NoteOp,
   HighlightOp,
   UnhighlightOp,

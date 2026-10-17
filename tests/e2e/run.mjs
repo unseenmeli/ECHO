@@ -128,7 +128,7 @@ async function launch(fakes, extraEnv = {}) {
       page.close()
       child.kill()
       await sleep(500)
-      spawn('taskkill', ['/F', '/PID', String(child.pid), '/T'], { stdio: 'ignore' })
+      if (process.platform === 'win32') spawn('taskkill', ['/F', '/PID', String(child.pid), '/T'], { stdio: 'ignore' })
     }
   }
 }
@@ -627,6 +627,63 @@ const scenarios = {
       if (dir) {
         await sleep(400)
         fs.writeFileSync(path.join(dir, 'lesson-chart.png'), Buffer.from((await lp.send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+      }
+      lp.close()
+    } finally {
+      await app.quit()
+      await fakes.close()
+    }
+  },
+
+  async lessonCode() {
+    console.log('\n[lessonCode] code cards are drawn line by line, lines light up with the narration, and Run shows real output')
+    const dir = process.env.E2E_SHOT_DIR
+    const fs = await import('node:fs')
+    const SEG = '<segment><objective>A loop adds numbers</objective><say>We start the total at zero. The loop then adds each number to it. Finally we print the result.</say></segment>'
+    const py = { op: 'code', id: 'loop_demo', title: 'A for loop', language: 'python', lines: ['total = 0', 'for n in range(1, 4):', '    total += n', '    print("added", n)', '', 'print("total is", total)'] }
+    const js = { op: 'code', id: 'js_demo', language: 'javascript', lines: ['const xs = [1, 2, 3]', 'console.log(xs.map((x) => x * 2))', 'console.log(missing)'] }
+    const plan = { setup: [py, js], cues: [{ sentence: 1, ops: [{ op: 'highlight', targets: ['loop_demo__l3'] }] }] }
+    const fakes = await startFakes({ replyText: [[withDraw(SEG, plan)]], tokenDelayMs: 8, autoTurns: false })
+    const app = await launch(fakes)
+    try {
+      await app.click('Start lesson')
+      const lessonTarget = await until(async () => (await targets()).find((t) => t.title === 'Lesson'), 15000, 'lesson window')
+      const lp = await connect(lessonTarget.webSocketDebuggerUrl)
+      await until(async () => (await sceneSummary().catch(() => null)) !== null, 15000, 'board ready')
+      await app.click('Start conversation')
+      await until(async () => (await app.states()).includes('listening'), 20000, 'listening')
+      fakes.fluxSend({ type: 'TurnInfo', event: 'StartOfTurn', turn_index: 0, transcript: 'How' })
+      fakes.fluxSend({ type: 'TurnInfo', event: 'EndOfTurn', turn_index: 0, transcript: 'How does a for loop add numbers up?', trigger: 'model' })
+      await until(async () => (await sceneSummary()).elements.some((e) => e.id === 'echo:loop_demo__l6__text'), 20000, 'code card drawn')
+      const scene = await sceneSummary()
+      const lineIds = scene.elements.filter((e) => e.echo?.kind === 'line' && e.echo.block === 'loop_demo').map((e) => e.echo.id)
+      check('one highlightable line per source line', lineIds.join() === 'loop_demo__l1,loop_demo__l2,loop_demo__l3,loop_demo__l4,loop_demo__l5,loop_demo__l6', lineIds.join())
+      check('indentation is kept in the drawn code', scene.elements.find((e) => e.id === 'echo:loop_demo__l3__text')?.text === '    total += n')
+      await until(async () => (await sceneSummary()).elements.some((e) => e.id === 'echo:hl_loop_demo__l3'), 20000, 'line highlight cue')
+      check('line 3 lights up when the narration reaches it', true)
+
+      const buttons = await until(async () => {
+        const n = await lp.eval(`document.querySelectorAll('.code-run-button').length`)
+        return n === 2 ? n : null
+      }, 10000, 'two Run buttons')
+      check('both runnable cards get a Run button', buttons === 2)
+      const outText = async (block) => (await sceneSummary()).elements.find((e) => e.id === `echo:${block}__out_text`)
+      const runAndWait = async (index, block) => {
+        await lp.eval(`document.querySelectorAll('.code-run-button')[${index}].click(); true`)
+        return until(async () => {
+          const el = await outText(block)
+          return el?.echo?.detail === 'ran' ? el : null
+        }, 60000, `${block} output`)
+      }
+      const titles = await lp.eval(`[...document.querySelectorAll('.code-run-button')].map((b) => b.title)`)
+      const pyIndex = titles.findIndex((t) => /Python/.test(t))
+      const pyOut = await runAndWait(pyIndex, 'loop_demo')
+      check('Python runs in the board (Pyodide) and its real output replaces the placeholder', pyOut.text === 'added 1\nadded 2\nadded 3\ntotal is 6', JSON.stringify(pyOut.text))
+      const jsOut = await runAndWait(1 - pyIndex, 'js_demo')
+      check('JavaScript output is shown, followed by the error', /^\[2,4,6\]\nReferenceError: missing is not defined$/.test(jsOut.text), JSON.stringify(jsOut.text))
+      if (dir) {
+        await sleep(400)
+        fs.writeFileSync(path.join(dir, 'lesson-code.png'), Buffer.from((await lp.send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
       }
       lp.close()
     } finally {

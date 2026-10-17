@@ -8,8 +8,10 @@ import { USER_REF, World, eid } from './world'
 
 export interface BlockSummary {
   id: string
-  kind: 'diagram' | 'chart' | 'table' | 'timeline' | 'other'
+  kind: 'diagram' | 'chart' | 'table' | 'timeline' | 'code' | 'other'
   title?: string
+  /** Code cards: the source as numbered lines, and what the learner's last Run printed. */
+  code?: { language: string; lines: string[]; output?: string }
   nodes: Array<{ id: string; label: string; detail?: string }>
   edges: Array<{ from: string; to: string; label?: string }>
   bbox: Rect
@@ -56,10 +58,15 @@ export function summarizeBoard(elements: BoardElement[], viewport: { scrollX: nu
       byBlock.set(m.block, b)
     }
     b.bbox = union([b.bbox, el.rect])!
-    if (m.kind === 'title') b.title = el.text
+    if (m.kind === 'code') {
+      b.kind = 'code'
+      b.code = { language: m.language ?? 'other', lines: (m.code ?? '').split('\n'), ...(b.code?.output ? { output: b.code.output } : {}) }
+    } else if (m.id === `${m.block}__out_text` && el.text && el.echo?.detail === 'ran') {
+      b.code = { language: b.code?.language ?? 'other', lines: b.code?.lines ?? [], output: el.text }
+    } else if (m.kind === 'title') b.title = el.text
     else if (m.kind === 'node') b.nodes.push({ id: m.id, label: m.label ?? el.text ?? '', ...(m.detail ? { detail: m.detail } : {}) })
     else if (m.kind === 'edge') b.edges.push({ from: m.from!, to: m.to!, ...(m.label ? { label: m.label } : {}) })
-    else if (m.kind === 'part') {
+    else if (m.kind === 'part' && b.kind !== 'code') {
       if (m.id.includes('__bar') || m.id.includes('__dot') || m.id.includes('__yaxis')) b.kind = 'chart'
       else if (/__r\d+c\d+$/.test(m.id)) b.kind = 'table'
       else if (m.id.endsWith('__line') && b.nodes.length) b.kind = 'timeline'
@@ -107,6 +114,11 @@ export function describeBoardForTutor(summary: BoardSummary, selection: Selectio
   if (!summary.blocks.length && !summary.userCount) lines.push('The whiteboard is empty.')
   for (const b of summary.blocks) {
     const parts = [`${b.kind} id=${b.id}${b.title ? ` "${b.title}"` : ''}`]
+    if (b.code) {
+      parts[0] += ` (${b.code.language}; highlight line n as ${b.id}__l<n>)`
+      parts.push(`lines: ${b.code.lines.map((l, i) => `${i + 1}: ${l.trimEnd().slice(0, 70)}`).join(' / ')}`)
+      if (b.code.output !== undefined) parts.push(`the learner ran it; output: "${b.code.output.replace(/\n/g, ' / ').slice(0, 300)}"`)
+    }
     if (b.nodes.length) parts.push(`nodes: ${b.nodes.map((n) => `${n.id} (${n.label})`).join(', ')}`)
     if (b.edges.length) parts.push(`links: ${b.edges.slice(0, MAX_LINKS).map((e) => `${e.from}→${e.to}${e.label ? ` (${e.label})` : ''}`).join('; ')}${b.edges.length > MAX_LINKS ? `, +${b.edges.length - MAX_LINKS} more` : ''}`)
     lines.push(`- ${parts.join(' | ')}`)
