@@ -142,6 +142,8 @@ export function attachScreenHost(win: BrowserWindow): void {
 }
 
 export function registerScreenIpc(ownWindows: () => BrowserWindow[]): void {
+  // The source picker is a native menu; only one can be open at a time.
+  let pickerOpen = false
   const fromHost = (e: Electron.IpcMainEvent): boolean => !!host && e.sender === host.webContents
 
   ipcMain.on('screen:started', (e, label: unknown) => {
@@ -182,7 +184,8 @@ export function registerScreenIpc(ownWindows: () => BrowserWindow[]): void {
   session.defaultSession.setDisplayMediaRequestHandler(
     async (request, callback) => {
       const requester = request.frame ? webContents.fromFrame(request.frame) : undefined
-      if (!host || requester !== host.webContents) return callback(null)
+      if (!host || requester !== host.webContents || pickerOpen) return callback(null)
+      pickerOpen = true
 
       const ownIds = new Set(ownWindows().map((w) => w.getMediaSourceId()))
       const sources = (
@@ -208,7 +211,12 @@ export function registerScreenIpc(ownWindows: () => BrowserWindow[]): void {
       ])
       // Clicks are delivered after the menu closes; wait a tick before
       // treating a close as "cancelled".
-      menu.once('menu-will-close', () => setTimeout(() => chosen || callback(null), 100))
+      menu.once('menu-will-close', () =>
+        setTimeout(() => {
+          pickerOpen = false
+          if (!chosen) callback(null)
+        }, 100)
+      )
       menu.popup({ window: host })
     },
     { useSystemPicker: true }

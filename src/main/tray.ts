@@ -7,6 +7,7 @@ export interface TrayActions {
   isCompanionVisible(): boolean
   toggleCompanion(): void
   openLesson(): void
+  openPreferences(): void
   toggleVoice(): void
   isVoiceActive(): boolean
   screen: {
@@ -57,6 +58,7 @@ export function createTray(actions: TrayActions): void {
         { type: 'separator' },
         ...screenItems(actions),
         { type: 'separator' },
+        { label: 'Preferences…', click: actions.openPreferences },
         { label: 'Quit Echo', click: () => app.quit() }
       ])
     )

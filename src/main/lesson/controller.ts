@@ -70,6 +70,8 @@ export class LessonState {
   presented: Array<{ id: string; objective: string; sentences: string[]; heard: number; complete: boolean }> = []
   visualHistory: Array<{ segment: string; objective: string; ops: string }> = []
   interruptedAt: { segmentId: string; sentence: number } | null = null
+  /** What the current lesson is about: the first step's objective, reset when the learner changes topic. */
+  topic: string | null = null
 
   nextSegmentId(): string {
     return `s${++this.seq}`
@@ -79,9 +81,10 @@ export class LessonState {
   describeForTutor(): string {
     if (!this.presented.length) return ''
     const recent = this.presented.slice(-4)
+    const topic = this.topic ? `Lesson topic: ${this.topic}` : ''
     const lines = recent.map((s) => `- ${s.id}: ${s.objective || s.sentences[0]?.slice(0, 80) || ''}${s.complete ? '' : ` (heard ${s.heard} of ${s.sentences.length} sentences)`}`)
     const cut = this.interruptedAt
-    return [`Segments already presented:`, ...lines, cut ? `The user interrupted during ${cut.segmentId} before sentence ${cut.sentence + 1}.` : ''].filter(Boolean).join('\n')
+    return [topic, `Segments already presented (${this.presented.length} so far, latest last):`, ...lines, cut ? `The user interrupted during ${cut.segmentId} before sentence ${cut.sentence + 1}.` : ''].filter(Boolean).join('\n')
   }
 }
 
@@ -301,6 +304,7 @@ export class LessonTurn {
     })
     s.metrics.ttsSentMs = this.io.now() - s.readyAt
     this.nextRelease += 1
+    if (!this.deps.lesson.topic || s.seg.newTopic) this.deps.lesson.topic = s.seg.objective || this.deps.lesson.topic
     this.deps.lesson.presented.push({ id: s.seg.id, objective: s.seg.objective, sentences: s.seg.sentences, heard: 0, complete: false })
   }
 

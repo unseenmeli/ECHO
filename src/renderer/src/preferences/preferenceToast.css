@@ -1,0 +1,66 @@
+/* A small dark pill that reads over both the light whiteboard and any desktop behind the companion. */
+.pref-toast {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0 6px;
+  max-width: calc(100% - 8px);
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(28, 28, 30, 0.88);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  animation: pref-toast-in 180ms ease-out;
+  user-select: none;
+}
+
+/* Where each window puts it: top of the companion, above the voice bar in the lesson window. */
+.companion-toast {
+  top: 4px;
+}
+
+.tutor-toast {
+  bottom: 84px;
+}
+
+.pref-toast-sep {
+  opacity: 0.55;
+}
+
+.pref-toast-undo {
+  all: unset;
+  cursor: pointer;
+  font-weight: 600;
+  color: #ff7ac0;
+  border-radius: 4px;
+}
+
+.pref-toast-undo:hover {
+  text-decoration: underline;
+}
+
+.pref-toast-undo:focus-visible {
+  outline: 2px solid #ff7ac0;
+  outline-offset: 2px;
+}
+
+@keyframes pref-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pref-toast {
+    animation: none;
+  }
+}

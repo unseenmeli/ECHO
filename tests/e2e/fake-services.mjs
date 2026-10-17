@@ -7,6 +7,11 @@ import { WebSocketServer } from 'ws'
 
 const TTS_RATE = 24000
 
+/** The one-word "close it, deepen it, or just answer?" check that precedes turns mentioning the lesson window. */
+export const isRouterRequest = (r) => String(r.system ?? '').startsWith('You route one spoken request')
+/** A tutor reply request. Tutor requests carry the preference tools; the old visuals planner carried plan_visuals. */
+export const isTutorRequest = (r) => !isRouterRequest(r) && !(Array.isArray(r.tools) && r.tools.some((t) => t.name === 'plan_visuals'))
+
 export async function startFakes(opts = {}) {
   const log = {
     flux: { connections: 0, closed: 0, auth: [], url: [], frames: 0, frameSizes: new Set(), silentFrames: 0, loudFrames: 0, forced: 0 },
@@ -174,8 +179,10 @@ export async function startFakes(opts = {}) {
         }, delay)
         return
       }
-      const tutorIndex = log.claude.requests.filter((r) => !r.tools).length - 1
-      const texts = Array.isArray(replyFor[0]) ? (replyFor[tutorIndex] ?? replyFor[replyFor.length - 1]) : replyFor
+      // Tutor requests offer only the preference tools; the quick lesson-routing check is its own kind of request.
+      const isRouter = isRouterRequest(parsed)
+      const tutorIndex = log.claude.requests.filter(isTutorRequest).length - 1
+      const texts = isRouter ? ['ANSWER'] : Array.isArray(replyFor[0]) ? (replyFor[tutorIndex] ?? replyFor[replyFor.length - 1]) : replyFor
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       const ev = (name, data) => res.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
       ev('message_start', { type: 'message_start', message: { id: 'msg_test', type: 'message', role: 'assistant', model: parsed.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } })

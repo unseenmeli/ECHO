@@ -65,6 +65,22 @@ const Line = memo(function Line({ entry }: { entry: TranscriptEntry }) {
       <span className="vd-who">ECHO</span> <span className="vd-spoken">{entry.text.slice(0, spoken)}</span>
       <span className="vd-pending">{entry.text.slice(spoken)}</span>
       {entry.interrupted && <span className="vd-cut"> — interrupted</span>}
+      {entry.searchFailed && <span className="vd-cut"> — web search failed, answered from memory</span>}
+      {entry.final && entry.sources?.length ? (
+        <span className="vd-sources">
+          Sources:
+          {entry.sources.map((s) => (
+            <button
+              key={s.url}
+              className={`vd-source${s.cited ? '' : ' is-found'}`}
+              title={`${s.cited ? '' : 'Found, not cited · '}${s.url}`}
+              onClick={() => window.voice.openLink(s.url)}
+            >
+              {s.title}
+            </button>
+          ))}
+        </span>
+      ) : null}
     </p>
   )
 })

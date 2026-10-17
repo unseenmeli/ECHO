@@ -44,6 +44,14 @@ export interface VoiceConfig {
 
   /** Whiteboard visuals alongside the spoken lesson (needs the lesson window open). */
   visualsEnabled: boolean
+
+  /** Let ECHO search the web (Anthropic's server-side web search tool) for facts it should not answer from memory. */
+  webSearchEnabled: boolean
+  /** Most searches in one quick answer, and in one deep dive (which researches before it teaches). */
+  webSearchMaxUses: number
+  webSearchDeepMaxUses: number
+  /** Offer Anthropic's hosted code execution (on Anthropic's servers) for checking calculations and examples. */
+  codeExecutionEnabled: boolean
 }
 
 const num = (v: string | undefined, fallback: number, min: number, max: number): number => {
@@ -107,6 +115,10 @@ export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigRes
       deepgramBase: (env.ECHO_DEEPGRAM_WS_BASE?.trim() || 'wss://api.deepgram.com').replace(/\/+$/, ''),
       logMetrics: bool(env.ECHO_LOG_METRICS, true),
       visualsEnabled: bool(env.ECHO_VISUALS, true),
+      webSearchEnabled: bool(env.ECHO_WEB_SEARCH, true),
+      webSearchMaxUses: num(env.ECHO_WEB_SEARCH_MAX_USES, 2, 1, 10),
+      webSearchDeepMaxUses: num(env.ECHO_WEB_SEARCH_DEEP_MAX_USES, 5, 1, 15),
+      codeExecutionEnabled: bool(env.ECHO_CODE_EXECUTION, true),
     }
   }
 }

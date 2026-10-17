@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { PreferenceEvent } from '../shared/preferences'
 import type { VoiceEvent } from '../shared/voice'
+import type { PreferencesApi } from './preferencesBridge'
 import type { VoiceApi } from './voiceBridge'
 import type { BoardMethod, SavedBoard } from '../shared/board'
 
@@ -30,6 +32,7 @@ contextBridge.exposeInMainWorld('tutor', api)
 const voiceApi: VoiceApi = {
   command: (cmd) => ipcRenderer.send('voice:command', cmd),
   getState: () => ipcRenderer.invoke('voice:get-state'),
+  openLink: (url) => ipcRenderer.send('voice:open-link', url),
   onEvent: (cb) => {
     const listener = (_e: unknown, event: VoiceEvent): void => cb(event)
     ipcRenderer.on('voice:event', listener)
@@ -37,5 +40,16 @@ const voiceApi: VoiceApi = {
   }
 }
 contextBridge.exposeInMainWorld('voice', voiceApi)
+// Saved-preference bridge: the "Preference saved · Undo" toast (see PreferenceToast).
+const preferencesApi: PreferencesApi = {
+  get: () => ipcRenderer.invoke('prefs:get'),
+  command: (cmd) => ipcRenderer.invoke('prefs:command', cmd),
+  onEvent: (cb) => {
+    const listener = (_e: unknown, event: PreferenceEvent): void => cb(event)
+    ipcRenderer.on('prefs:event', listener)
+    return () => ipcRenderer.removeListener('prefs:event', listener)
+  }
+}
+contextBridge.exposeInMainWorld('preferences', preferencesApi)
 
 export type TutorApi = typeof api

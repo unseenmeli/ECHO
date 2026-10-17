@@ -56,6 +56,8 @@ export function useScreenWatcher() {
   const streamRef = useRef<MediaStream | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const lastSignature = useRef<Uint8Array | null>(null)
+  // The source picker is a native menu. Asking again while it is open would stack a second one.
+  const picking = useRef<Promise<boolean> | null>(null)
 
   const stop = useCallback(() => {
     const stream = streamRef.current
@@ -67,22 +69,32 @@ export function useScreenWatcher() {
     window.companion.screen.reportStopped()
   }, [])
 
-  const start = useCallback(async () => {
-    if (streamRef.current) return
-    let stream: MediaStream
-    try {
-      stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 5, max: 10 } }, audio: false })
-    } catch {
-      return // Picker cancelled or permission denied.
+  /** Resolves true once sharing is on, false if the picker was cancelled or refused. */
+  const start = useCallback((): Promise<boolean> => {
+    if (streamRef.current) return Promise.resolve(true)
+    if (picking.current) return picking.current
+    const run = async (): Promise<boolean> => {
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 5, max: 10 } }, audio: false })
+      } catch {
+        return false // Picker cancelled or permission denied.
+      }
+      const [track] = stream.getVideoTracks()
+      // Fires when sharing is stopped from the OS (e.g. the macOS menu-bar indicator).
+      track.addEventListener('ended', stop)
+      streamRef.current = stream
+      videoRef.current ??= createVideoSink()
+      videoRef.current.srcObject = stream
+      await videoRef.current.play()
+      window.companion.screen.reportStarted(track.label)
+      return true
     }
-    const [track] = stream.getVideoTracks()
-    // Fires when sharing is stopped from the OS (e.g. the macOS menu-bar indicator).
-    track.addEventListener('ended', stop)
-    streamRef.current = stream
-    videoRef.current ??= createVideoSink()
-    videoRef.current.srcObject = stream
-    await videoRef.current.play()
-    window.companion.screen.reportStarted(track.label)
+    const pending = run().finally(() => {
+      picking.current = null
+    })
+    picking.current = pending
+    return pending
   }, [stop])
 
   const capture = useCallback(async (trigger: FrameTrigger, requestId: string | null = null) => {

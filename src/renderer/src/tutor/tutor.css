@@ -465,6 +465,38 @@ body,
   font-size: 12px;
 }
 
+/* Web sources under an answer: small links, cited pages first, pages only found dimmed. */
+.vd-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: #6f6c64;
+}
+
+.vd-source {
+  all: unset;
+  cursor: pointer;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pink-deep);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.vd-source.is-found {
+  opacity: 0.6;
+}
+
+.vd-source:focus-visible {
+  outline: 2px solid var(--pink-deep);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 .vd-bar {
   align-self: center;
   display: flex;

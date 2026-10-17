@@ -2,8 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { PhraseChunker, sanitizeForSpeech } from '../src/main/voice/chunker'
 import { EchoGuard } from '../src/main/voice/echoGuard'
 import { ConversationHistory } from '../src/main/voice/history'
-import { asksAboutScreen, classifyIntent, DEEP_FILLERS, isNoise, pickFiller, SCREEN_FILLERS, wantsDeepDive } from '../src/main/voice/intent'
-import { buildSystemPrompt, TUTOR_SYSTEM_PROMPT, withImage } from '../src/main/voice/claude'
+import {
+  asksAboutScreen,
+  classifyIntent,
+  closeFallback,
+  couldBeLessonRequest,
+  DEEP_FILLERS,
+  isNoise,
+  parseRoute,
+  pickFiller,
+  SCREEN_FILLERS
+} from '../src/main/voice/intent'
+import { buildSystemPrompt, buildTurnContext, TUTOR_SYSTEM_PROMPT, withImage } from '../src/main/voice/claude'
 import { readVoiceConfig } from '../src/main/voice/config'
 import { parseVoiceCommand } from '../src/shared/voice'
 
@@ -102,24 +112,38 @@ describe('intent', () => {
       expect(asksAboutScreen(t)).toBe(false)
     }
   })
-  it('recognizes requests for a deep dive', () => {
+  it('flags turns that might be about the lesson window, without deciding anything', () => {
     for (const t of [
       'Explain CI/CD deeply',
       'Can you go in depth on recursion?',
       'go deeper',
       'Give me a deep dive into DNS',
+      'close the deep dive',
+      'close the whiteboard',
+      'hide this window',
       'Explain it properly',
-      'break CI/CD down for me',
       'walk me through how TLS works',
-      'Teach me Kubernetes',
-      'explain this in detail',
-      'I want the heavy explanation',
       'draw it on the board'
     ]) {
-      expect(wantsDeepDive(t), t).toBe(true)
+      expect(couldBeLessonRequest(t), t).toBe(true)
     }
     for (const t of ['What is deep learning?', 'What is CI/CD?', 'Thanks!', 'What is a variable?']) {
-      expect(wantsDeepDive(t), t).toBe(false)
+      expect(couldBeLessonRequest(t), t).toBe(false)
+    }
+  })
+  it('reads the routing model one-word answer', () => {
+    expect(parseRoute('DEEP')).toBe('deep_dive')
+    expect(parseRoute(' close.')).toBe('close_lesson')
+    expect(parseRoute('Answer')).toBe('none')
+    expect(parseRoute('I am not sure')).toBeNull()
+    expect(parseRoute('')).toBeNull()
+  })
+  it('the offline fallback can only close the lesson window, never open or deepen it', () => {
+    for (const t of ['close the deep dive', 'Close the whiteboard.', 'please close the lesson window', 'hide the board', 'ok shut the window']) {
+      expect(closeFallback(t), t).toBe('close_lesson')
+    }
+    for (const t of ['give me a deep dive on DNS', 'what is a deep dive?', 'close the browser tab', 'explain it in depth', 'go deeper']) {
+      expect(closeFallback(t), t).toBe('none')
     }
   })
   it('picks fillers from the list it is given', () => {
@@ -154,11 +178,11 @@ describe('screen context for Claude', () => {
         { type: 'text', text: 'What is on my screen?' }
       ]
     })
-    expect(withImage(messages)).toBe(messages)
+    expect(withImage(messages)).toEqual(messages)
   })
   it('tells Claude what it already said', () => {
-    expect(buildSystemPrompt(null)).toBe(TUTOR_SYSTEM_PROMPT)
-    const prompt = buildSystemPrompt({ screen: 'A screenshot is attached.' }, 'Looking into it!')
+    expect(buildSystemPrompt()).toBe(TUTOR_SYSTEM_PROMPT)
+    const prompt = buildTurnContext({ screen: 'A screenshot is attached.' }, 'Looking into it!')
     expect(prompt).toContain('<screen_context>\nA screenshot is attached.\n</screen_context>')
     expect(prompt).toContain('<already_said>\nLooking into it!\n</already_said>')
   })
@@ -187,6 +211,26 @@ describe('ConversationHistory', () => {
     h.addUser('two')
     h.commitAssistant('b')
     expect(h.toMessages(3)[0].role).toBe('user')
+  })
+
+  it('stays bounded: older turns fold into a summary, newer ones stay verbatim', () => {
+    const h = new ConversationHistory()
+    for (let i = 0; i < 30; i++) {
+      h.addUser(`q${i}`)
+      h.commitAssistant(`a${i}`)
+    }
+    expect(h.toMessages(10).length).toBeLessThanOrEqual(20) // capped even before any summary exists
+    const plan = h.foldPlan(10)!
+    expect(plan.turns[0].content).toBe('q0')
+    h.addUser('q30') // a turn arriving while the summary is being written is kept
+    h.applyFold(plan.upTo, 'Covered q0 to q27.')
+    const msgs = h.toMessages(10)
+    expect(msgs[0].content).toBe('<conversation_summary>\nCovered q0 to q27.\n</conversation_summary>\n\nq28')
+    expect(msgs.at(-1)!.content).toBe('q30')
+    // Between folds the start of what is sent doesn't change, so it can be read from cache.
+    h.commitAssistant('a30')
+    h.addUser('q31')
+    expect(h.toMessages(10)[0]).toEqual(msgs[0])
   })
 })
 

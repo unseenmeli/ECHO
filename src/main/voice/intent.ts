@@ -35,9 +35,11 @@ export const SCREEN_FILLERS = [
   'Let me squint at that for a moment.'
 ]
 
-// Requests for a real lesson rather than a quick answer: these open the whiteboard and switch the tutor to
-// deep-dive teaching. Bare "deep" is left out on purpose so "what is deep learning?" stays a normal question.
-const DEEP = new RegExp(
+// Words that might mean the learner is talking about the lesson window or asking for a real lesson. They never
+// decide anything on their own: a turn that matches is put to the model (see ROUTER_SYSTEM), which judges what
+// was meant ("close the deep dive" and "explain it as a deep dive" share words and want opposite things).
+// Turns that match nothing skip the extra call, so ordinary questions pay no latency for it.
+const LESSON_SIGNAL = new RegExp(
   [
     String.raw`\bin[-\s]?depth\b`,
     String.raw`\bdeep(?:er|ly)\b`,
@@ -58,13 +60,78 @@ const DEEP = new RegExp(
     String.raw`\bexplain (?:[\w/.-]+ ){0,4}properly\b`,
     String.raw`\b(?:draw|sketch|diagram) (?:it|this|that|me|out)\b`,
     String.raw`\b(?:on|at|to) the (?:white)?board\b`,
-    String.raw`\bopen (?:the |a )?lesson\b`
+    String.raw`\bopen (?:the |a )?lesson\b`,
+    // Talk about the window itself, which is how it gets closed.
+    String.raw`\blessons?\b`,
+    String.raw`\b(?:white)?board\b`,
+    String.raw`\bwindow\b`
   ].join('|'),
   'i'
 )
 
-export function wantsDeepDive(transcript: string): boolean {
-  return DEEP.test(transcript)
+/** True when the turn is worth a quick model check for a lesson request (open/deepen/close). */
+export function couldBeLessonRequest(transcript: string): boolean {
+  return LESSON_SIGNAL.test(transcript)
+}
+
+// Asking to be quizzed or to practise. Like LESSON_SIGNAL, this only decides whether the model is asked.
+const PRACTICE_SIGNAL =
+  /\bquiz(?:zes|zing)?\b|\btest (?:me|my)\b|\bpractis(?:e|ing)\b|\bpractic(?:e|ing)\b|\bexercises?\b|\bcheck (?:my|if i|whether i|that i)\b|\bask me (?:a |some |an? \w+ |\w+ )?questions?\b|\bflash ?cards?\b|\bdrill me\b|\bchallenge me\b|\bcheckpoint\b|\bhow well (?:do )?i (?:understand|know)\b/i
+// While practice runs, ways of ending it.
+const PRACTICE_END_SIGNAL = /\b(?:stop|end|enough|done|finish(?:ed)?|quit|no more|move on|that's it|let'?s stop)\b/i
+
+/** True when the turn is worth a quick model check for starting (or, while practising, ending) a practice activity. */
+export function couldBePracticeRequest(transcript: string, practising: boolean): boolean {
+  return PRACTICE_SIGNAL.test(transcript) || (practising && PRACTICE_END_SIGNAL.test(transcript))
+}
+
+export type LessonAction = 'none' | 'deep_dive' | 'close_lesson' | 'practice' | 'end_practice'
+
+/** The question put to the model for a turn that matched a signal above. One word back keeps it fast. */
+export const ROUTER_SYSTEM = `You route one spoken request for ECHO, a voice tutor that can open a lesson window with a whiteboard. Reply with exactly one word:
+DEEP: the learner is asking ECHO to teach or explain something in depth: a full lesson, a deep dive, a walkthrough, or to draw it out on the whiteboard.
+CLOSE: the learner is telling ECHO to close, hide, dismiss or end the lesson window, whiteboard or deep dive.
+PRACTICE: the learner wants to be quizzed, tested, to practise, or to have their understanding checked with questions.
+STOP_PRACTICE: a practice activity is running and the learner wants to stop it or move on.
+ANSWER: anything else. That includes questions about what a deep dive or a quiz is, remarks that only mention a lesson or the board, subjects like "deep learning", and requests to close something other than ECHO's lesson window.
+Judge what the learner means, not which words they used. When unsure, reply ANSWER.`
+
+export function routerPrompt(transcript: string, lessonOpen: boolean, lastEchoLine: string | null, practising = false): string {
+  return [
+    `Lesson window: ${lessonOpen ? 'open' : 'closed'}`,
+    `Practice activity: ${practising ? 'running' : 'none'}`,
+    lastEchoLine ? `ECHO's last words: "${lastEchoLine.slice(-240).replace(/"/g, "'")}"` : null,
+    `Learner: "${transcript.replace(/"/g, "'")}"`
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+/** Reads the model's one-word answer. Null when it said something else. */
+export function parseRoute(text: string): LessonAction | null {
+  const m = /\b(STOP_PRACTICE|DEEP|CLOSE|PRACTICE|ANSWER)\b/i.exec(text)
+  if (!m) return null
+  switch (m[1].toUpperCase()) {
+    case 'DEEP':
+      return 'deep_dive'
+    case 'CLOSE':
+      return 'close_lesson'
+    case 'PRACTICE':
+      return 'practice'
+    case 'STOP_PRACTICE':
+      return 'end_practice'
+    default:
+      return 'none'
+  }
+}
+
+// Only used when the model could not be asked in time (offline, timed out): closing the window must still work.
+// It can only close, never open or deepen anything.
+const CLOSE_FALLBACK =
+  /^(?:(?:ok(?:ay)?|alright|please|hey|echo|can you|could you|would you)[\s,]+)*(?:close|dismiss|hide|shut|exit|end|put away|get rid of|minimi[sz]e)\s+(?:down\s+)?(?:the\s+|this\s+|that\s+|your\s+)?(?:deep[-\s]?dive|lesson|white\s?board|board|window)(?:\s+(?:window|please))?[\s,.!]*(?:please|echo)?[\s.!]*$/i
+
+export function closeFallback(transcript: string): LessonAction {
+  return CLOSE_FALLBACK.test(transcript.trim()) ? 'close_lesson' : 'none'
 }
 
 /** Said while the whiteboard opens and the lesson is planned. */

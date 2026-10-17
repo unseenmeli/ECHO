@@ -1,0 +1,149 @@
+:root {
+  --bg: #f5f4f0;
+  --card: #ffffff;
+  --ink: #1c1c1e;
+  --muted: #6b6b70;
+  --line: rgba(0, 0, 0, 0.12);
+  --accent: #c41f74;
+  --danger: #b3261e;
+  --focus-ring: #0a84ff;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.prefs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 20px 22px 0;
+  gap: 14px;
+}
+
+.prefs-header h1 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.prefs-header p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.pref-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pref-row {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px 12px;
+}
+
+.pref-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pref-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pref-hint {
+  margin: 2px 0 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.pref-row select,
+.pref-row input {
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.pref-row select:focus-visible,
+.pref-row input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.pref-error {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--danger);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.pref-forget {
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  font-size: 12px;
+  color: var(--accent);
+  border-radius: 4px;
+}
+
+.pref-forget:hover {
+  text-decoration: underline;
+}
+
+.prefs-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0 16px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pref-forget-all {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--danger);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.pref-forget-all:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

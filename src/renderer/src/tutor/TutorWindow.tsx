@@ -10,6 +10,7 @@ import { CodeRunButtons, describeRun, findCodeCards, writeCodeOutput, type CodeC
 import avatarSrc from '../assets/echo-avatar.png'
 import characterSrc from '../assets/poses/frame-1.png'
 import { VoiceDock } from '../voice/VoiceDock'
+import { PreferenceToast } from '../preferences/PreferenceToast'
 
 const SAVE_DELAY_MS = 250
 const isMac = navigator.platform.startsWith('Mac')
@@ -167,6 +168,7 @@ export function TutorWindow() {
         <CodeRunButtons cards={codeCards} running={running} onRun={(card) => void runCard(card)} />
       </main>
       <VoiceDock />
+      <PreferenceToast className="tutor-toast" />
     </div>
   )
 }

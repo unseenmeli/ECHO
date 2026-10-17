@@ -42,6 +42,28 @@ export interface TranscriptEntry {
   spokenChars?: number
   /** Assistant entries: the user cut this reply off. */
   interrupted?: boolean
+  /** Assistant entries: web pages the answer drew on (cited ones first). */
+  sources?: SourceLink[]
+  /** Assistant entries: a web search was attempted and failed, so the answer is from memory. */
+  searchFailed?: boolean
+}
+
+export interface SourceLink {
+  title: string
+  url: string
+  /** False when the page was only found, not cited for a specific claim. */
+  cited: boolean
+}
+
+/** Only web links may be opened from the UI. */
+export function isOpenableUrl(url: unknown): url is string {
+  if (typeof url !== 'string' || url.length > 2048) return false
+  try {
+    const u = new URL(url)
+    return u.protocol === 'https:' || u.protocol === 'http:'
+  } catch {
+    return false
+  }
 }
 
 export interface VoiceMetrics {
