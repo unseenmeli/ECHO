@@ -85,7 +85,7 @@ const ROUTE_TIMEOUT_MS = 3000
 /** How long a picture request waits for the picture to be found. */
 const PICTURE_WAIT_MS = 10000
 /** If nothing has been said this long after the learner finished, a brief wait line fills the silence. */
-const WAIT_LINE_DELAY_MS = 1500
+const WAIT_LINE_DELAY_MS = 2000
 const CLOSED_LESSON_ACK = 'Okay, I closed the whiteboard.'
 const NOTHING_TO_CLOSE_ACK = "The whiteboard isn't open right now."
 
