@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Excalidraw, MainMenu, WelcomeScreen } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import '@excalidraw/excalidraw/index.css'
-import type { SavedBoard } from '../../../shared/board'
+import type { BoardApi, SavedBoard } from '../../../shared/board'
 import { createBoardController } from './boardController'
+import { createCodeRunner } from './codeRunner'
+import { CodeRunButtons, describeRun, findCodeCards, writeCodeOutput, type CodeCard } from './CodeRunButtons'
 import avatarSrc from '../assets/echo-avatar.png'
 import characterSrc from '../assets/poses/frame-1.png'
 import { VoiceDock } from '../voice/VoiceDock'
@@ -19,6 +21,11 @@ export function TutorWindow() {
   const saveTimer = useRef(0)
   const pending = useRef<SavedBoard | null>(null)
   const boardRef = useRef<HTMLElement>(null)
+  const controller = useRef<BoardApi | null>(null)
+  const runner = useMemo(createCodeRunner, [])
+  const [codeCards, setCodeCards] = useState<CodeCard[]>([])
+  const [running, setRunning] = useState<ReadonlySet<string>>(new Set())
+  useEffect(() => runner.dispose, [runner])
 
   useEffect(() => {
     window.tutor.loadBoard().then(setInitial)
@@ -28,6 +35,7 @@ export function TutorWindow() {
   useEffect(() => {
     if (!api) return
     const board = createBoardController(api)
+    controller.current = board
     const off = window.tutor.handleBoardRequests((method, args) =>
       (board[method] as (...a: unknown[]) => Promise<unknown>)(...args)
     )
@@ -61,12 +69,33 @@ export function TutorWindow() {
       style.setProperty('--paper-y', `${state.scrollY * z}px`)
     }
 
+    // Run buttons follow their code cards; only re-render when one actually moved.
+    const cards = findCodeCards(elements, { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value })
+    setCodeCards((prev) => (JSON.stringify(prev) === JSON.stringify(cards) ? prev : cards))
+
     pending.current = {
       elements: JSON.parse(JSON.stringify(elements.filter((e) => !e.isDeleted))),
       viewport: { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value }
     }
     window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(flush, SAVE_DELAY_MS)
+  }
+
+  const runCard = async (card: CodeCard): Promise<void> => {
+    const board = controller.current
+    if (!board) return
+    setRunning((s) => new Set(s).add(card.block))
+    try {
+      await writeCodeOutput(board, card.block, card.language === 'python' ? 'Starting Python…' : 'Running…', 'status', false)
+      const { text, tone } = describeRun(await runner.run(card.language, card.code))
+      await writeCodeOutput(board, card.block, text, tone, true)
+    } finally {
+      setRunning((s) => {
+        const next = new Set(s)
+        next.delete(card.block)
+        return next
+      })
+    }
   }
 
   return (
@@ -135,6 +164,7 @@ export function TutorWindow() {
             </WelcomeScreen>
           </Excalidraw>
         )}
+        <CodeRunButtons cards={codeCards} running={running} onRun={(card) => void runCard(card)} />
       </main>
       <VoiceDock />
     </div>

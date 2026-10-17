@@ -40,6 +40,8 @@ export function describePlan(plan: VisualPlan): string {
         return `diagram ${op.id}(${op.nodes.map((n) => n.id).join(',')})`
       case 'add':
         return `add ${(op.nodes ?? []).map((n) => n.id).join(',') || 'edges'}`
+      case 'code':
+        return `code ${op.id}(${op.language}, ${op.lines.length} lines)`
       case 'chart':
       case 'table':
       case 'timeline':

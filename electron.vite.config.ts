@@ -20,7 +20,14 @@ const STATIC_FILES: Record<string, string> = {
   'vad-assets/vad.worklet.bundle.min.js': nm('@ricky0123/vad-web/dist/vad.worklet.bundle.min.js'),
   'vad-assets/silero_vad_v5.onnx': nm('@ricky0123/vad-web/dist/silero_vad_v5.onnx'),
   'vad-assets/ort-wasm-simd-threaded.mjs': nm('onnxruntime-web/dist/ort-wasm-simd-threaded.mjs'),
-  'vad-assets/ort-wasm-simd-threaded.wasm': nm('onnxruntime-web/dist/ort-wasm-simd-threaded.wasm')
+  'vad-assets/ort-wasm-simd-threaded.wasm': nm('onnxruntime-web/dist/ort-wasm-simd-threaded.wasm'),
+  // Pyodide (CPython compiled to WebAssembly), for the Run button on Python code cards.
+  ...Object.fromEntries(
+    ['pyodide.mjs', 'pyodide.asm.mjs', 'pyodide.asm.wasm', 'python_stdlib.zip', 'pyodide-lock.json'].map((f) => [
+      `pyodide/${f}`,
+      nm(`pyodide/${f}`)
+    ])
+  )
 }
 
 const MIME: Record<string, string> = {
@@ -28,7 +35,9 @@ const MIME: Record<string, string> = {
   '.wasm': 'application/wasm',
   '.mjs': 'text/javascript',
   '.js': 'text/javascript',
-  '.onnx': 'application/octet-stream'
+  '.onnx': 'application/octet-stream',
+  '.zip': 'application/zip',
+  '.json': 'application/json'
 }
 
 function resolveAsset(urlPath: string): string | null {

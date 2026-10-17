@@ -5,6 +5,7 @@ import { VisualPlanSchema, visualPlanJsonSchema, type VisualOp, type VisualPlan 
 import { fmt, layoutEdgeLabel, mergeBatch, skeletonBounds, translateOps } from '../src/main/lesson/translate'
 import { SegmentStreamParser, containsDeictic, parseDrawing, splitSentences, stripDeictic } from '../src/main/lesson/tutorProtocol'
 import type { DataSeries } from '../src/main/lesson/types'
+import { describeBoardForTutor, summarizeBoard } from '../src/main/lesson/summary'
 import { validatePlan } from '../src/main/lesson/validate'
 import { World } from '../src/main/lesson/world'
 
@@ -476,5 +477,59 @@ describe('arrow routing and camera policy', () => {
     const board = mergeBatch([], first.batch)
     const r = translateOps([{ op: 'remove', ids: ['d_n1'] }], board, CTX)
     expect(r.batch.remove.filter((id) => id.endsWith(':label')).length).toBe(2)
+  })
+})
+
+describe('code cards', () => {
+  const code: VisualOp = {
+    op: 'code',
+    id: 'loop_demo',
+    title: 'A for loop',
+    language: 'python',
+    lines: ['total = 0', 'for n in range(3):', '\ttotal += n', '', 'print(total)']
+  }
+  const echo = (s: { customData?: unknown }) => (s.customData as { echo?: { id: string; kind: string; code?: string } } | undefined)?.echo
+
+  it('draws one highlightable strip per line, numbered from 1, with the source on the card', () => {
+    const { batch, warnings } = translateOps([code], [], CTX)
+    expect(warnings).toEqual([])
+    const lines = batch.upsert.filter((s) => echo(s)?.kind === 'line').map((s) => echo(s)!.id)
+    expect(lines).toEqual(['loop_demo__l1', 'loop_demo__l2', 'loop_demo__l3', 'loop_demo__l4', 'loop_demo__l5'])
+    const card = batch.upsert.find((s) => echo(s)?.kind === 'code')!
+    expect(echo(card)!.code).toBe('total = 0\nfor n in range(3):\n    total += n\n\nprint(total)')
+    // Runnable languages get an output strip; empty lines get no text element.
+    expect(batch.upsert.some((s) => s.id === 'echo:loop_demo__out_text')).toBe(true)
+    expect(batch.upsert.some((s) => s.id === 'echo:loop_demo__l4__text')).toBe(false)
+  })
+
+  it('has no output strip for languages the board cannot run', () => {
+    const { batch } = translateOps([{ ...code, id: 'java_demo', language: 'java' } as VisualOp], [], CTX)
+    expect(batch.upsert.some((s) => s.id === 'echo:java_demo__out_text')).toBe(false)
+  })
+
+  it('lights up a line inside the card instead of ringing around it', () => {
+    const board = mergeBatch([], translateOps([code], [], CTX).batch)
+    const { batch } = translateOps([{ op: 'highlight', targets: ['loop_demo__l3'] }], board, CTX)
+    const line = board.find((e) => e.id === 'echo:loop_demo__l3')!
+    const wash = batch.upsert.find((s) => echo(s)?.kind === 'ring' && s.id.endsWith('__glow'))!
+    expect({ x: wash.x, y: wash.y, w: wash.width, h: wash.height }).toEqual({ x: line.x, y: line.y, w: line.width, h: line.height })
+  })
+
+  it('lets a cue in the same plan highlight a line of a new card', () => {
+    const p: VisualPlan = { setup: [code], cues: [{ sentence: 1, ops: [{ op: 'highlight', targets: ['loop_demo__l2'] }] }] }
+    expect(validatePlan(p, { world: World.from([]), sentenceCount: 2, data: [] })).toEqual([])
+    const bad: VisualPlan = { setup: [code], cues: [{ sentence: 0, ops: [{ op: 'highlight', targets: ['loop_demo__l9'] }] }] }
+    expect(validatePlan(bad, { world: World.from([]), sentenceCount: 2, data: [] }).join()).toMatch(/unknown element id "loop_demo__l9"/)
+  })
+
+  it('tells the tutor the numbered source and, once run, the real output', () => {
+    let board = mergeBatch([], translateOps([code], [], CTX).batch)
+    expect(describeBoardForTutor(summarizeBoard(board, VIEW), [])).toMatch(/code id=loop_demo .*python; highlight line n as loop_demo__l<n>.*2: for n in range\(3\):/)
+    board = board.map((e) =>
+      e.id === 'echo:loop_demo__out_text'
+        ? ({ ...e, text: '3', customData: { echo: { id: 'loop_demo__out_text', kind: 'part', block: 'loop_demo', detail: 'ran' } } } as BoardElement)
+        : e
+    )
+    expect(describeBoardForTutor(summarizeBoard(board, VIEW), [])).toMatch(/the learner ran it; output: "3"/)
   })
 })

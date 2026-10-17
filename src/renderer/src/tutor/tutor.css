@@ -621,3 +621,53 @@ body,
     transform: translateY(4px);
   }
 }
+
+/* Run buttons floated over the header of Python / JavaScript code cards (see CodeRunButtons.tsx). They follow
+   the camera, so they are positioned in board pixels and scaled with the zoom. */
+.code-run-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.code-run-button {
+  position: absolute;
+  transform-origin: top right;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 11px 0 9px;
+  border: none;
+  border-radius: 999px;
+  background: var(--pink);
+  color: #fff;
+  font: 600 12px/1 var(--system-font);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 0 var(--pink-deep);
+  transition: filter 0.15s ease;
+}
+
+.code-run-button:hover {
+  filter: brightness(1.08);
+}
+
+.code-run-button:active {
+  box-shadow: none;
+  translate: 0 2px;
+}
+
+.code-run-button:disabled {
+  cursor: progress;
+  filter: saturate(0.6);
+}
+
+.code-run-button svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+}

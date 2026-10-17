@@ -5,7 +5,7 @@ import { union, type Rect } from './layout'
 export interface EchoMeta {
   /** Logical id the agents use. */
   id: string
-  kind: 'node' | 'edge' | 'title' | 'part' | 'ring' | 'note' | 'group' | 'shadow'
+  kind: 'node' | 'edge' | 'title' | 'part' | 'ring' | 'note' | 'group' | 'shadow' | 'code' | 'line'
   /** Diagram / chart / table block this belongs to. */
   block?: string
   seg?: string
@@ -17,6 +17,11 @@ export interface EchoMeta {
   shape?: string
   /** For a shadow: the logical id of the element it sits behind. */
   of?: string
+  /** For a code card: its language and source (the board's Run button reads these). */
+  language?: string
+  code?: string
+  /** For a code line: its 1-based line number. */
+  line?: number
 }
 
 export const ECHO_PREFIX = 'echo:'

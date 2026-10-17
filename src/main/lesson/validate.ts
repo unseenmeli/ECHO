@@ -107,6 +107,13 @@ export function validatePlan(plan: VisualPlan, ctx: ValidationContext): string[]
         for (const id of ids) register(id, op.id)
         return
       }
+      case 'code': {
+        if (!fresh(op.id, `${where} code`)) return
+        if (op.lines.some((l) => l.includes('\n'))) errors.push(`${where} code "${op.id}": put each line in its own entry of "lines"`)
+        register(op.id, op.id)
+        op.lines.forEach((_, i) => register(`${op.id}__l${i + 1}`, op.id))
+        return
+      }
       case 'note': {
         if (!fresh(op.id, `${where} note`)) return
         if (op.near) exists(op.near, `${where} note.near`, true)
