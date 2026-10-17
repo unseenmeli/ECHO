@@ -37,9 +37,24 @@ export class AccessCodeStore {
   }
 }
 
-/** The server address: from the environment (development) or baked in at build time (MAIN_VITE_ECHO_BACKEND_URL). */
+/**
+ * Built in so judges can just open the app: ECHO's server and a demo access code. The code is public (so is this
+ * repository); the server's per-code daily limits cap what it can cost, and removing judge-1 from
+ * ECHO_ACCESS_CODES on Vercel revokes it.
+ */
+export const BUILT_IN_BACKEND_URL = 'https://hackaton-backend-seven-taupe.vercel.app'
+export const BUILT_IN_ACCESS_CODE = 'JWPC-SJ7U-56Z6'
+
+/** The server address: ECHO_BACKEND_URL ("off" to use your own keys from .env), a build-time one, or the built-in one. */
 export function backendUrl(): string {
-  return process.env.ECHO_BACKEND_URL?.trim() || import.meta.env.MAIN_VITE_ECHO_BACKEND_URL?.trim() || ''
+  const env = process.env.ECHO_BACKEND_URL?.trim()
+  if (env) return /^(off|none)$/i.test(env) ? '' : env
+  return import.meta.env.MAIN_VITE_ECHO_BACKEND_URL?.trim() || BUILT_IN_BACKEND_URL
+}
+
+/** The access code to use: one saved in Preferences, then ECHO_ACCESS_CODE, then the built-in demo code. */
+export function accessCodeFor(store: AccessCodeStore | null): string {
+  return store?.get() || process.env.ECHO_ACCESS_CODE?.trim() || BUILT_IN_ACCESS_CODE
 }
 
 /** Asks the server whether the code works (GET /api/usage). null: couldn't reach it. */
@@ -52,14 +67,15 @@ async function checkCode(url: string, code: string): Promise<boolean | null> {
   }
 }
 
-/** Lets the app's own windows see whether a code is needed and save one. The code itself is never sent back. */
+/** Lets the app's own windows see which code is in use and save another. A saved code is never sent back. */
 export function registerAccessIpc(store: AccessCodeStore, windows: () => BrowserWindow[]): void {
   const isAppWindow = (wc: WebContents): boolean => windows().some((w) => w.webContents === wc)
 
   ipcMain.handle('access:get', (event): AccessInfo | null => {
     if (!isAppWindow(event.sender)) return null
     const url = parseBackendUrl(backendUrl())
-    return { server: typeof url === 'string' ? new URL(url).host : null, hasCode: !!store.get() || !!process.env.ECHO_ACCESS_CODE }
+    const own = !!store.get() || !!process.env.ECHO_ACCESS_CODE?.trim()
+    return { server: typeof url === 'string' ? new URL(url).host : null, hasCode: true, builtInCode: own ? null : BUILT_IN_ACCESS_CODE }
   })
 
   ipcMain.handle('access:set', async (event, raw: unknown): Promise<AccessSaveResult> => {
@@ -68,7 +84,7 @@ export function registerAccessIpc(store: AccessCodeStore, windows: () => Browser
     if (code.length > 200) return { ok: false, message: 'That code is too long.' }
     if (!code) {
       store.set(null)
-      return { ok: true, message: 'Access code removed.' }
+      return { ok: true, message: 'Using the built-in access code again.' }
     }
     const url = parseBackendUrl(backendUrl())
     if (typeof url === 'string') {

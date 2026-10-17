@@ -14,6 +14,11 @@ export function AccessSection() {
 
   if (!info?.server) return null
 
+  const reset = async (): Promise<void> => {
+    setResult(await window.access.set(''))
+    setInfo(await window.access.get())
+  }
+
   const save = async (e: FormEvent): Promise<void> => {
     e.preventDefault()
     setBusy(true)
@@ -30,14 +35,26 @@ export function AccessSection() {
     <section className="access">
       <h2>Access code</h2>
       <p>
-        ECHO runs through {info.server}. {info.hasCode ? 'A code is saved on this computer.' : 'Enter the access code you were given.'}
+        ECHO runs through {info.server}.{' '}
+        {info.builtInCode ? (
+          <>
+            Using the built-in code <code className="access-code">{info.builtInCode}</code>, so there is nothing to enter.
+          </>
+        ) : (
+          <>
+            Using your own code.{' '}
+            <button type="button" className="access-reset" onClick={() => void reset()}>
+              Use the built-in code
+            </button>
+          </>
+        )}
       </p>
       <form className="access-form" onSubmit={(e) => void save(e)}>
         <input
           type="password"
           autoComplete="off"
           spellCheck={false}
-          placeholder={info.hasCode ? 'Replace the saved code' : 'XXXX-XXXX-XXXX'}
+          placeholder="Use a different code (optional)"
           value={code}
           onChange={(e) => setCode(e.target.value)}
         />
