@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, session as electronSession, systemPreferences } from 'electron'
+import { app, BrowserWindow, ipcMain, session as electronSession, shell, systemPreferences } from 'electron'
 import { board, isBoardOpen } from '../board'
 import { ClaudeChat } from './claude'
 import { loadEnvFiles, readVoiceConfig } from './config'
@@ -8,8 +8,10 @@ import { FluxClient } from './flux'
 import { screenVoiceContext } from './screenProvider'
 import type { EnginePort } from './ports'
 import { VoiceSession } from './session'
+import type { PreferenceStore } from '../memory/preferenceStore'
 import {
   IDLE_SNAPSHOT,
+  isOpenableUrl,
   parseVoiceCommand,
   type EngineError,
   type EnginePlaybackReport,
@@ -33,6 +35,8 @@ class VoiceHost {
   private envLoaded = false
   private canCaptureScreen: (wc: Electron.WebContents) => boolean = () => false
   private openLesson: (timeoutMs: number) => Promise<boolean> = async () => false
+  private closeLesson: () => void = () => {}
+  private preferences: PreferenceStore | null = null
 
   // --- EnginePort ---------------------------------------------------------------------
   private readonly enginePort: EnginePort = {
@@ -49,12 +53,25 @@ class VoiceHost {
   /**
    * @param canCaptureScreen The window allowed to share the screen (the companion).
    * @param openLesson Opens the lesson window and resolves once its board is ready.
+   * @param closeLesson Closes the lesson window (the learner asked ECHO to).
+   * @param preferences The learner's saved preferences, given to the model and written through its tools.
    */
   register(
-    options: { canCaptureScreen?(wc: Electron.WebContents): boolean; openLesson?(timeoutMs: number): Promise<boolean> } = {}
+    options: {
+      canCaptureScreen?(wc: Electron.WebContents): boolean
+      openLesson?(timeoutMs: number): Promise<boolean>
+      closeLesson?(): void
+      preferences?: PreferenceStore
+    } = {}
   ): void {
     if (options.canCaptureScreen) this.canCaptureScreen = options.canCaptureScreen
     if (options.openLesson) this.openLesson = options.openLesson
+    if (options.closeLesson) this.closeLesson = options.closeLesson
+    if (options.preferences) {
+      this.preferences = options.preferences
+      // A voice chosen in the settings window applies to a conversation that is already running.
+      options.preferences.subscribe(() => this.session?.onPreferencesChanged())
+    }
     this.setupPermissions()
     // Test/diagnostic hook, never on by default: lets the e2e harness read the live whiteboard.
     if (!app.isPackaged && process.env.ECHO_DEBUG_HOOKS === '1') (globalThis as Record<string, unknown>).__echoBoard = board
@@ -63,6 +80,10 @@ class VoiceHost {
       if (this.isEngine(event.sender)) return
       const cmd = parseVoiceCommand(raw)
       if (cmd) this.handleCommand(cmd)
+    })
+    // Source links from the transcript open in the default browser; nothing but web URLs is accepted.
+    ipcMain.on('voice:open-link', (event, url: unknown) => {
+      if (!this.isEngine(event.sender) && isOpenableUrl(url)) void shell.openExternal(url)
     })
     ipcMain.handle('voice:get-state', (event): VoiceStateReply | null => {
       if (this.isEngine(event.sender)) return null
@@ -188,13 +209,16 @@ class VoiceHost {
       config: cfg,
       engine: this.enginePort,
       createStt: (hooks) => new FluxClient(cfg, hooks),
-      createTts: (hooks) => new DeepgramTts(cfg, hooks),
+      // The saved voice wins over the env default, and is read each time a speech socket is opened.
+      createTts: (hooks) => new DeepgramTts({ ...cfg, ttsVoice: this.preferences?.get('voice') ?? cfg.ttsVoice }, hooks),
       chat,
       lesson: {
         available: () => cfg.visualsEnabled && isBoardOpen(),
         board: () => (isBoardOpen() ? board : null),
         open: (timeoutMs) => (cfg.visualsEnabled ? this.openLesson(timeoutMs) : Promise.resolve(false)),
+        close: () => this.closeLesson()
       },
+      ...(this.preferences ? { preferences: this.preferences } : {}),
       contextProvider: screenVoiceContext,
       emit: (e) => this.broadcast(e),
       log: (m) => console.log(m)

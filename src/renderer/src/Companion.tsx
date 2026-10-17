@@ -1,5 +1,6 @@
 import { useRef, type PointerEvent } from 'react'
 import { CharacterSprite } from './CharacterSprite'
+import { PreferenceToast } from './preferences/PreferenceToast'
 import { useScreenWatcher } from './useScreenWatcher'
 import { useVoice } from './voice/useVoice'
 
@@ -38,14 +39,27 @@ export function Companion() {
   const voiceLabel = voiceOn ? 'End conversation' : 'Start conversation'
 
   // Questions are about the screen, so starting a conversation also offers to
-  // share it first. Cancelling the picker still starts the conversation.
+  // share it first. Cancelling the picker still starts the conversation, and the
+  // picker is not offered again until sharing has been turned on (the tray menu
+  // always offers it), so repeated clicks never keep popping the menu up.
+  const pickerDeclined = useRef(false)
+  const starting = useRef(false)
   const toggleVoice = async (): Promise<void> => {
-    if (!voiceOn && screen.status === 'off') await screen.start()
-    window.voice.command({ type: 'toggle' })
+    if (starting.current) return // a click while the picker is open must not toggle the conversation again
+    starting.current = true
+    try {
+      if (!voiceOn && screen.status === 'off' && !pickerDeclined.current) {
+        pickerDeclined.current = !(await screen.start())
+      }
+      window.voice.command({ type: 'toggle' })
+    } finally {
+      starting.current = false
+    }
   }
 
   return (
     <main className="companion" data-voice={snapshot.state}>
+      <PreferenceToast className="companion-toast" />
       {screen.status !== 'off' && (
         <button
           className="watch-pill"

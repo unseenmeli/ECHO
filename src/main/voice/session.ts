@@ -1,25 +1,45 @@
 import type { VoiceConfig } from './config'
 import { LessonState, LessonTurn, type LessonBoardPort, type TurnIO } from '../lesson/controller'
 import { describeBoardForTutor, summarizeBoard, summarizeSelection } from '../lesson/summary'
-import { DEEP_DIVE_ADDENDUM, LESSON_PROMPT_ADDENDUM, SegmentStreamParser } from '../lesson/tutorProtocol'
+import { LESSON_PROMPT_ADDENDUM, SegmentStreamParser } from '../lesson/tutorProtocol'
+import { selectSkills, skillsPrompt } from '../skills'
 import { PhraseChunker, type Phrase } from './chunker'
-import { buildSystemPrompt } from './claude'
+import { buildSystemPrompt, buildTurnContext, preferencesBlock } from './claude'
 import { EchoGuard } from './echoGuard'
-import { ConversationHistory } from './history'
-import type { ChatMessage } from './history'
-import { asksAboutScreen, classifyIntent, DEEP_FILLERS, isNoise, pickFiller, SCREEN_FILLERS, wantsDeepDive } from './intent'
+import { ConversationHistory, SUMMARY_SYSTEM, summaryRequest } from './history'
+import {
+  asksAboutScreen,
+  classifyIntent,
+  closeFallback,
+  couldBeLessonRequest,
+  couldBePracticeRequest,
+  DEEP_FILLERS,
+  isNoise,
+  parseRoute,
+  pickFiller,
+  ROUTER_SYSTEM,
+  routerPrompt,
+  SCREEN_FILLERS,
+  type LessonAction
+} from './intent'
 import {
   ChatError,
   type ChatPort,
+  type ChatRequest,
+  type ChatResult,
   type EnginePort,
   type LinkStatus,
   type SttHooks,
   type SttPort,
+  type ToolCall,
   type TtsHooks,
   type TtsPort,
   type TurnInfo,
   type VoiceContextProvider
 } from './ports'
+import { CODE_EXECUTION_GUIDE, WEB_SEARCH_DEEP_LESSON, WEB_SEARCH_DEEP_VERBAL, WEB_SEARCH_GUIDE, WEB_SEARCH_LESSON } from './research'
+import type { PreferenceStorePort } from '../memory/preferenceStore'
+import { PREFERENCE_TOOL_GUIDE, PREFERENCE_TOOLS, PreferenceTools } from '../memory/preferenceTools'
 import {
   IDLE_SNAPSHOT,
   type EngineError,
@@ -28,7 +48,8 @@ import {
   type VoiceEvent,
   type VoiceMetrics,
   type VoiceSnapshot,
-  type VoiceState
+  type VoiceState,
+  type SourceLink
 } from '../../shared/voice'
 
 /** After local VAD ducks playback, wait this long for STT to confirm real speech before un-ducking. */
@@ -45,6 +66,10 @@ const LESSON_MAX_TOKENS = 2400
 const DEEP_MAX_TOKENS = 7000
 /** What the "go deeper" button says on the learner's behalf. */
 export const DEEP_DIVE_REQUEST = 'Go deeper on that. Explain it in depth.'
+/** How long to wait for the model to say whether a turn is a lesson request before falling back. */
+const ROUTE_TIMEOUT_MS = 3000
+const CLOSED_LESSON_ACK = 'Okay, I closed the whiteboard.'
+const NOTHING_TO_CLOSE_ACK = "The whiteboard isn't open right now."
 
 /** What the session needs to run a lesson with whiteboard visuals alongside the speech. */
 export interface LessonSupport {
@@ -53,10 +78,12 @@ export interface LessonSupport {
   board(): LessonBoardPort | null
   /** Open the lesson window and resolve once its board is ready (false if it could not be opened). */
   open?(timeoutMs: number): Promise<boolean>
+  /** Close the lesson window. */
+  close?(): void
 }
 
-/** Used when a deep dive was asked for but no whiteboard could be opened. */
-const VERBAL_DEEP_DIVE = `The learner asked you to go deep. For this answer, ignore the brevity rules above: give a thorough spoken explanation of up to about 12 sentences. Unpack the name, explain the problem it solves, how it works step by step, and one concrete example.`
+/** How many learner turns a practice activity keeps check-understanding loaded unless it is ended sooner. */
+const PRACTICE_MAX_TURNS = 12
 
 export interface SessionDeps {
   config: VoiceConfig
@@ -68,7 +95,16 @@ export interface SessionDeps {
   now?(): number
   contextProvider?: VoiceContextProvider
   lesson?: LessonSupport
+  /** Saved user preferences: supplied to the model on every request, and written through its tools. */
+  preferences?: PreferenceStorePort
   log?(message: string): void
+}
+
+interface SubmitOptions {
+  /** The go-deeper button: teach in depth without asking the model what the words meant. */
+  forceDeep?: boolean
+  /** Answer with this exact line instead of asking the model (acknowledging a saved preference). */
+  localText?: string
 }
 
 interface Segment {
@@ -78,6 +114,10 @@ interface Segment {
 
 interface Reply {
   id: string
+  /** What the learner said that this reply answers. */
+  question: string
+  /** Spoken as-is, without asking the model. */
+  localText: string | null
   /** Set when this reply runs as a visual lesson (segments + whiteboard). */
   lessonTurn: LessonTurn | null
   abort: AbortController
@@ -87,6 +127,11 @@ interface Reply {
   filler: string | null
   /** The learner asked for depth: open the whiteboard and teach a full lesson. */
   deep: boolean
+  /** Part of a practice or checkpoint activity the learner asked for. */
+  practice: boolean
+  /** Web pages the answer drew on, for the transcript. */
+  sources: SourceLink[]
+  searchFailed: boolean
   sinceFlush: string
   segments: Segment[]
   flushedAcks: number
@@ -139,6 +184,15 @@ export class VoiceSession {
   private lessonState = new LessonState()
   private entrySeq = 0
   private lastFiller: string | null = null
+  private readonly prefTools: PreferenceTools | null
+  /** The voice the current speech socket was opened with, to notice a changed preference. */
+  private ttsVoice: string | undefined
+  /** A web search is running, so the status line says so. */
+  private searching = false
+  /** Learner turns left in the current practice activity (0: none running). */
+  private practiceTurnsLeft = 0
+  /** The background request folding older turns into the conversation summary, if one is running. */
+  private summarizing: AbortController | null = null
 
   private duckTimer: ReturnType<typeof setTimeout> | null = null
   private releaseTimer: ReturnType<typeof setTimeout> | null = null
@@ -147,7 +201,9 @@ export class VoiceSession {
   /** An interrupted reply whose heard portion is still being measured by the engine. */
   private pendingStop: { reply: Reply; timer: ReturnType<typeof setTimeout> } | null = null
 
-  constructor(private readonly deps: SessionDeps) {}
+  constructor(private readonly deps: SessionDeps) {
+    this.prefTools = deps.preferences ? new PreferenceTools(deps.preferences) : null
+  }
 
   private now(): number {
     return this.deps.now ? this.deps.now() : Date.now()
@@ -186,6 +242,8 @@ export class VoiceSession {
     this.history.clear()
     this.echo.reset()
     this.lessonState = new LessonState()
+    this.prefTools?.reset()
+    this.practiceTurnsLeft = 0
     this.entries = []
     this.turn = null
     this.reply = null
@@ -197,13 +255,30 @@ export class VoiceSession {
       onTurn: (info) => epoch === this.epoch && this.onTurn(info),
       onStatus: (s) => epoch === this.epoch && this.onSttStatus(s)
     })
-    this.tts = this.deps.createTts({
+    this.tts = this.makeTts(epoch)
+    this.deps.engine.start(this.effectiveMuted(), this.deps.config.bargeInMs)
+    this.stt.connect()
+    this.tts.ensureConnected()
+  }
+
+  private makeTts(epoch: number): TtsPort {
+    this.ttsVoice = this.deps.preferences?.get('voice')
+    return this.deps.createTts({
       onAudio: (id, buf) => epoch === this.epoch && this.onTtsAudio(id, buf),
       onFlushed: (id, seg) => epoch === this.epoch && this.onTtsFlushed(id, seg),
       onError: (id, msg, fatal) => epoch === this.epoch && this.onTtsError(id, msg, fatal)
     })
-    this.deps.engine.start(this.effectiveMuted(), this.deps.config.bargeInMs)
-    this.stt.connect()
+  }
+
+  /**
+   * A new voice preference only takes effect on a new speech socket. Swap it between replies, so the line that
+   * announced the change finishes in the old voice and everything after it is in the new one.
+   */
+  onPreferencesChanged(): void {
+    if (!this.active || this.reply || !this.deps.preferences) return
+    if (this.deps.preferences.get('voice') === this.ttsVoice) return
+    this.tts?.close()
+    this.tts = this.makeTts(this.epoch)
     this.tts.ensureConnected()
   }
 
@@ -263,7 +338,7 @@ export class VoiceSession {
     if (!this.active || !this.history.toMessages(2).length) return false
     if (this.reply) this.interrupt('deep-dive')
     this.updateTurnEntry({ index: -1, text: DEEP_DIVE_REQUEST, suspect: false, entryId: null }, true)
-    this.submit(DEEP_DIVE_REQUEST)
+    this.submit(DEEP_DIVE_REQUEST, { forceDeep: true })
     return true
   }
 
@@ -464,7 +539,9 @@ export class VoiceSession {
       return
     }
     if (this.reply) this.interrupt('new-turn')
-    this.submit(text)
+    // If ECHO just asked whether to remember something, a short yes/no settles it without another model call.
+    const answer = this.prefTools?.resolveProposal(text)
+    this.submit(text, answer ? { localText: answer.spoken } : {})
   }
 
   private confirmTurn(turn: Turn): void {
@@ -474,24 +551,39 @@ export class VoiceSession {
 
   // --- Reply lifecycle --------------------------------------------------------------
 
-  private submit(text: string): void {
+  private submit(text: string, options: SubmitOptions = {}): void {
     this.flushPendingStop() // make sure history reflects what was heard before the next question
     // An unanswered earlier question + this one are one question split by a pause.
     if (this.history.hasUnansweredUser()) this.history.mergeIntoLastUser(text)
     else this.history.addUser(text)
-    this.startReply(text)
+    this.startReply(text, options)
   }
 
-  private startReply(question: string): void {
+  private canTeachOnBoard(): boolean {
+    return !!(this.deps.lesson?.open || this.deps.lesson?.available())
+  }
+
+  private startReply(question: string, options: SubmitOptions = {}): void {
     const epoch = this.epoch
+    // Whether this turn is a lesson request is the model's call, not a keyword's. Turns with nothing lesson-like
+    // in them skip that check entirely.
+    const needsRoute =
+      !options.forceDeep &&
+      !options.localText &&
+      (couldBeLessonRequest(question) || couldBePracticeRequest(question, this.practiceTurnsLeft > 0))
     const reply: Reply = {
       id: `r${++this.replySeq}`,
+      question,
+      localText: options.localText ?? null,
       lessonTurn: null,
       abort: new AbortController(),
       chunker: new PhraseChunker(),
       fullText: '',
       filler: null,
-      deep: wantsDeepDive(question) && !!(this.deps.lesson?.open || this.deps.lesson?.available()),
+      deep: !!options.forceDeep,
+      practice: false,
+      sources: [],
+      searchFailed: false,
       sinceFlush: '',
       segments: [],
       flushedAcks: 0,
@@ -504,16 +596,182 @@ export class VoiceSession {
     this.reply = reply
     this.tts?.begin(reply.id)
     this.upsertEntry({ id: reply.id, role: 'assistant', text: '', final: false, spokenChars: 0 })
-    // Opening the whiteboard or looking at the screen takes a moment: say so instead of going quiet.
-    const watching = !!this.deps.contextProvider?.isWatchingScreen?.()
-    const fillers = reply.deep ? DEEP_FILLERS : watching && asksAboutScreen(question) ? SCREEN_FILLERS : null
-    if (fillers) {
-      reply.filler = this.lastFiller = pickFiller(this.lastFiller, Math.random, fillers)
-      this.speakPhrase(reply, { text: reply.filler, flush: false })
-      this.flushSegment(reply, true)
-    }
+    if (!needsRoute && !reply.localText) this.speakFiller(reply)
     this.refresh()
-    void this.runChat(reply, epoch)
+    void this.runChat(reply, epoch, needsRoute)
+  }
+
+  /** Opening the whiteboard or looking at the screen takes a moment: say so instead of going quiet. */
+  private speakFiller(reply: Reply): void {
+    const watching = !!this.deps.contextProvider?.isWatchingScreen?.()
+    const fillers = reply.deep && this.canTeachOnBoard() ? DEEP_FILLERS : watching && asksAboutScreen(reply.question) ? SCREEN_FILLERS : null
+    if (!fillers) return
+    reply.filler = this.lastFiller = pickFiller(this.lastFiller, Math.random, fillers)
+    this.speakPhrase(reply, { text: reply.filler, flush: false })
+    this.flushSegment(reply, true)
+  }
+
+  /**
+   * Asks the model, in one word, whether the learner wants a deep dive, wants the lesson window closed, or neither.
+   * If it can't answer in time, only a plain "close the whiteboard" is honored; nothing is ever opened by a guess.
+   */
+  private async routeLesson(reply: Reply): Promise<LessonAction> {
+    const ctl = new AbortController()
+    const onAbort = (): void => ctl.abort()
+    reply.abort.signal.addEventListener('abort', onAbort, { once: true })
+    const timer = setTimeout(() => ctl.abort(), ROUTE_TIMEOUT_MS)
+    const lastEcho = this.history.toMessages(4).reverse().find((m) => m.role === 'assistant')?.content ?? null
+    let text = ''
+    try {
+      await this.deps.chat.stream({
+        system: ROUTER_SYSTEM,
+        maxTokens: 8,
+        cache: false,
+        reasoning: 'off',
+        effort: 'low',
+        messages: [{ role: 'user', content: routerPrompt(reply.question, !!this.deps.lesson?.available(), lastEcho, this.practiceTurnsLeft > 0) }],
+        signal: ctl.signal,
+        onText: (d) => (text += d)
+      })
+    } catch {
+      // Treated like a timeout below.
+    } finally {
+      clearTimeout(timer)
+      reply.abort.signal.removeEventListener('abort', onAbort)
+    }
+    if (reply.abort.signal.aborted) return 'none'
+    const action = parseRoute(text) ?? closeFallback(reply.question)
+    this.log(`[voice] lesson route: ${action}`)
+    return action
+  }
+
+  /** Speaks a fixed line as the whole reply. */
+  private speakLocally(reply: Reply, text: string): void {
+    this.speakPhrase(reply, { text, flush: false })
+    this.endClaude(reply)
+  }
+
+  private closeLessonByVoice(reply: Reply): void {
+    const lesson = this.deps.lesson
+    const wasOpen = !!lesson?.available()
+    if (wasOpen) {
+      lesson?.close?.()
+      this.lessonState = new LessonState() // the next lesson starts fresh
+    }
+    this.speakLocally(reply, wasOpen ? CLOSED_LESSON_ACK : NOTHING_TO_CLOSE_ACK)
+  }
+
+  /** Preference and other tool calls the model made while answering. */
+  private onToolUse(reply: Reply, call: ToolCall): void {
+    const outcome = this.prefTools?.handle(call, reply.question)
+    if (outcome) this.log(`[voice] ${outcome.tool}: ${outcome.note}`)
+  }
+
+  /** The rules for the preference tools (cached with the system prompt) and the saved preferences (sent after it). */
+  private preferenceParts(): { guide: string | null; tail: string | undefined } {
+    if (!this.deps.preferences) return { guide: null, tail: undefined }
+    return { guide: PREFERENCE_TOOL_GUIDE, tail: preferencesBlock(this.deps.preferences.promptBlock()) }
+  }
+
+  /**
+   * Reasoning per kind of reply. Quick answers skip thinking so the first word comes fast, at low effort (short spoken
+   * answers). Whiteboard answers get medium effort for the drawing. Deep explanations may think first: the filler
+   * line and the hook cover the wait.
+   */
+  private reasoningFor(reply: Reply, lesson: boolean): Pick<ChatRequest, 'reasoning' | 'effort'> {
+    if (reply.deep) return { reasoning: 'adaptive', effort: 'medium' }
+    return { reasoning: 'off', effort: lesson || reply.practice ? 'medium' : 'low' }
+  }
+
+  /** Sources and failed searches for the transcript; failures are said out loud by the model and shown here too. */
+  private onChatResult(reply: Reply, result: ChatResult): void {
+    reply.sources = result.sources
+    reply.searchFailed = result.searchErrors.length > 0 && !result.sources.some((s) => s.cited)
+    if (reply.searchFailed) {
+      this.deps.emit({ type: 'lesson-status', status: { level: 'warn', message: 'Web search failed, so that answer is from memory.' } })
+    }
+  }
+
+  /** App note stored with a reply in history: where it was cut off, and which sites it cited. */
+  private historyNote(r: Reply, interrupted: boolean): string | undefined {
+    const notes: string[] = []
+    const cited = [...new Set(r.sources.filter((s) => s.cited).map((s) => new URL(s.url).hostname.replace(/^www\./, '')))].slice(0, 4)
+    if (cited.length) notes.push(`[sources: ${cited.join(', ')}]`)
+    if (interrupted) notes.push('[cut off here: the learner interrupted]')
+    return notes.length ? notes.join(' ') : undefined
+  }
+
+  /**
+   * Folds older turns into the running summary once there are more than the configured history limit. Runs in the
+   * background; the next replies keep sending the recent turns verbatim until it lands, and stop() cancels it.
+   */
+  private maybeSummarize(): void {
+    if (this.summarizing || !this.active) return
+    const plan = this.history.foldPlan(this.deps.config.historyMessages)
+    if (!plan) return
+    const epoch = this.epoch
+    const ctl = new AbortController()
+    this.summarizing = ctl
+    let text = ''
+    this.deps.chat
+      .stream({
+        system: SUMMARY_SYSTEM,
+        cache: false,
+        reasoning: 'off',
+        effort: 'low',
+        maxTokens: 600,
+        messages: [{ role: 'user', content: summaryRequest(plan.previous, plan.turns) }],
+        signal: ctl.signal,
+        onText: (d) => (text += d)
+      })
+      .then(() => {
+        if (epoch !== this.epoch || ctl.signal.aborted || !text.trim()) return
+        this.history.applyFold(plan.upTo, text.trim())
+        this.log(`[voice] folded ${plan.upTo} older turns into the conversation summary`)
+      })
+      .catch(() => this.log('[voice] conversation summary failed; recent turns are still sent verbatim'))
+      .finally(() => {
+        if (this.summarizing === ctl) this.summarizing = null
+      })
+  }
+
+  private toolsForRequest(): { tools?: typeof PREFERENCE_TOOLS } {
+    return this.prefTools ? { tools: PREFERENCE_TOOLS } : {}
+  }
+
+  /**
+   * Web search and code execution for this request: the rules for the system prompt and the request fields that turn
+   * the tools on. Deep dives get more searches, since they research before they teach.
+   */
+  private research(reply: Reply, lesson: boolean): { guide: string; options: Pick<ChatRequest, 'webSearch' | 'onSearchStart' | 'codeExecution'> } {
+    const cfg = this.deps.config
+    const guides: string[] = []
+    const options: Pick<ChatRequest, 'webSearch' | 'onSearchStart' | 'codeExecution'> = {}
+    if (cfg.webSearchEnabled) {
+      guides.push(reply.deep ? (lesson ? WEB_SEARCH_DEEP_LESSON : WEB_SEARCH_DEEP_VERBAL) : lesson ? WEB_SEARCH_LESSON : WEB_SEARCH_GUIDE)
+      options.webSearch = { maxUses: reply.deep ? cfg.webSearchDeepMaxUses : cfg.webSearchMaxUses }
+      options.onSearchStart = () => this.setSearching(reply, true)
+    }
+    if (cfg.codeExecutionEnabled) {
+      guides.push(CODE_EXECUTION_GUIDE)
+      options.codeExecution = true
+    }
+    return { guide: guides.join('\n\n'), options }
+  }
+
+  /** Instruction packs for this reply (see skills/). Logged, so the selection can be checked in the app log. */
+  private skillsFor(reply: Reply, whiteboard: boolean): string {
+    const names = selectSkills({ whiteboard, deep: reply.deep, practice: reply.practice })
+    this.log(`[voice] skills: ${names.join(', ') || 'none'}`)
+    return skillsPrompt(names)
+  }
+
+  /** "Searching the web…" while a search runs, so a quiet moment doesn't look like a hang. */
+  private setSearching(reply: Reply, on: boolean): void {
+    if (this.searching === on || (on && this.reply !== reply)) return
+    this.searching = on
+    this.deps.emit({ type: 'lesson-status', status: { level: 'info', message: on ? 'Searching the web…' : null } })
+    if (on) this.log('[voice] web search started')
   }
 
   private async runLessonChat(reply: Reply, epoch: number): Promise<void> {
@@ -539,7 +797,7 @@ export class VoiceSession {
       now: () => this.now()
     }
     const messages = this.history.toMessages(this.deps.config.historyMessages)
-    const question = messages.length && messages[messages.length - 1].role === 'user' ? messages[messages.length - 1].content : ''
+    const question = reply.question
     const turn = new LessonTurn({
       io,
       board,
@@ -550,25 +808,31 @@ export class VoiceSession {
     reply.lessonTurn = turn
     const parser = new SegmentStreamParser()
     try {
-      const [withContext, context] = await Promise.all([
-        this.withLessonContext(messages, board),
+      const [lessonContext, context] = await Promise.all([
+        this.lessonContextFor(board),
         this.deps.contextProvider?.getContext().catch(() => null) ?? null
       ])
       if (!alive()) return
+      const research = this.research(reply, true)
+      const prefs = this.preferenceParts()
       await this.deps.chat.stream({
-        // The whiteboard reaches the tutor through <lesson_context>; only the screen comes from here.
-        system:
-          buildSystemPrompt(context && { ...context, board: undefined }, reply.filler) +
-          '\n' +
-          LESSON_PROMPT_ADDENDUM +
-          (reply.deep ? '\n' + DEEP_DIVE_ADDENDUM : ''),
+        system: buildSystemPrompt(prefs.guide, LESSON_PROMPT_ADDENDUM, this.skillsFor(reply, true), research.guide),
+        systemTail: prefs.tail,
+        // The whiteboard reaches the tutor through <lesson_context>, the screen through <screen_context>.
+        turnContext: buildTurnContext(context, reply.filler, lessonContext),
         maxTokens: Math.max(this.deps.config.claudeMaxTokens, reply.deep ? DEEP_MAX_TOKENS : LESSON_MAX_TOKENS),
         deep: reply.deep,
-        messages: withContext,
+        ...this.reasoningFor(reply, true),
+        ...this.toolsForRequest(),
+        ...research.options,
+        onToolUse: (call) => alive() && this.onToolUse(reply, call),
+        onResult: (result) => alive() && this.onChatResult(reply, result),
+        messages,
         image: context?.screenImage,
         signal: reply.abort.signal,
         onText: (delta) => {
           if (!alive()) return
+          this.setSearching(reply, false)
           if (reply.tFirstText === undefined) reply.tFirstText = this.now()
           for (const seg of parser.push(delta)) turn.onTutorSegment(seg)
         }
@@ -590,8 +854,8 @@ export class VoiceSession {
     turn.onTutorDone()
   }
 
-  /** The tutor only knows about the board through this: what is drawn, what the user selected, lesson progress. */
-  private async withLessonContext(messages: ChatMessage[], board: LessonBoardPort | null): Promise<ChatMessage[]> {
+  /** The tutor only knows about the board through this: topic and progress, what is drawn (with ids), the selection. */
+  private async lessonContextFor(board: LessonBoardPort | null): Promise<string | null> {
     const parts: string[] = []
     if (board) {
       try {
@@ -603,15 +867,31 @@ export class VoiceSession {
       }
     }
     const state = this.lessonState.describeForTutor()
-    if (state) parts.push(state)
-    const last = messages[messages.length - 1]
-    if (!parts.length || !last || last.role !== 'user') return messages
-    return [...messages.slice(0, -1), { ...last, content: `${last.content}\n\n<lesson_context>\n${parts.join('\n\n')}\n</lesson_context>` }]
+    if (state) parts.unshift(state)
+    return parts.length ? `<lesson_context>\n${parts.join('\n\n')}\n</lesson_context>` : null
   }
 
-  private async runChat(reply: Reply, epoch: number): Promise<void> {
+  private async runChat(reply: Reply, epoch: number, needsRoute: boolean): Promise<void> {
     const alive = (): boolean => epoch === this.epoch && this.reply === reply && !reply.abort.signal.aborted
     const lesson = this.deps.lesson
+    if (reply.localText !== null) {
+      this.speakLocally(reply, reply.localText)
+      return
+    }
+    if (needsRoute) {
+      const action = await this.routeLesson(reply)
+      if (!alive()) return
+      if (action === 'close_lesson') return this.closeLessonByVoice(reply)
+      reply.deep = action === 'deep_dive'
+      if (action === 'practice') this.practiceTurnsLeft = PRACTICE_MAX_TURNS
+      if (action === 'end_practice') this.practiceTurnsLeft = 0
+      this.speakFiller(reply)
+    }
+    // A practice activity keeps its pack loaded while the learner answers, up to PRACTICE_MAX_TURNS turns.
+    if (this.practiceTurnsLeft > 0) {
+      reply.practice = true
+      this.practiceTurnsLeft -= 1
+    }
     if (reply.deep && lesson?.open && !lesson.available()) {
       // The filler is already playing; the lesson starts as soon as the board can be drawn on.
       const opened = await lesson.open(LESSON_OPEN_TIMEOUT_MS).catch(() => false)
@@ -622,13 +902,26 @@ export class VoiceSession {
     try {
       const context = (await this.deps.contextProvider?.getContext().catch(() => null)) ?? null
       if (!alive()) return
+      const research = this.research(reply, false)
+      const prefs = this.preferenceParts()
       await this.deps.chat.stream({
-        system: buildSystemPrompt(context, reply.filler) + (reply.deep ? '\n' + VERBAL_DEEP_DIVE : ''),
+        system: buildSystemPrompt(prefs.guide, this.skillsFor(reply, false), research.guide),
+        systemTail: prefs.tail,
+        turnContext: buildTurnContext(context, reply.filler),
         ...(reply.deep ? { maxTokens: Math.max(this.deps.config.claudeMaxTokens, 1200), deep: true } : {}),
+        ...this.reasoningFor(reply, false),
+        ...this.toolsForRequest(),
+        ...research.options,
+        onToolUse: (call) => alive() && this.onToolUse(reply, call),
+        onResult: (result) => alive() && this.onChatResult(reply, result),
         messages: this.history.toMessages(this.deps.config.historyMessages),
         image: context?.screenImage,
         signal: reply.abort.signal,
-        onText: (delta) => alive() && this.onClaudeText(reply, delta)
+        onText: (delta) => {
+          if (!alive()) return
+          this.setSearching(reply, false)
+          this.onClaudeText(reply, delta)
+        }
       })
     } catch (err) {
       if (!alive()) return
@@ -754,6 +1047,7 @@ export class VoiceSession {
   private finishReply(r: Reply, interrupted: boolean): void {
     if (this.reply !== r) return
     this.reply = null
+    this.setSearching(r, false)
     if (!interrupted) r.lessonTurn?.onComplete()
     let delivered: string
     if (interrupted) {
@@ -765,7 +1059,8 @@ export class VoiceSession {
       delivered = this.deliveredText(r, true)
     } else {
       delivered = r.fullText
-      this.history.commitAssistant(this.withoutFiller(r, delivered))
+      this.history.commitAssistant(this.withoutFiller(r, delivered), this.historyNote(r, false))
+      this.maybeSummarize()
     }
     const entry = this.entries.find((e) => e.id === r.id)
     if (entry) {
@@ -774,10 +1069,13 @@ export class VoiceSession {
         text: r.fullText,
         final: true,
         interrupted,
-        spokenChars: interrupted ? delivered.length : r.fullText.length
+        spokenChars: interrupted ? delivered.length : r.fullText.length,
+        ...(r.sources.length ? { sources: r.sources } : {}),
+        ...(r.searchFailed ? { searchFailed: true } : {})
       })
     }
     this.refresh()
+    this.onPreferencesChanged() // a voice change made during this reply applies from the next one
   }
 
   /**
@@ -802,7 +1100,8 @@ export class VoiceSession {
       }
     }
     const heard = this.withoutFiller(r, delivered)
-    this.history.commitAssistant(heard)
+    this.history.commitAssistant(heard, this.historyNote(r, true))
+    this.maybeSummarize()
     // ECHO did start answering: the user's question was heard, so the next turn is a new one.
     // A filler line alone doesn't count; the question is still open.
     if (!heard && r.audioStarted && !r.filler) this.history.markAnswered()
@@ -857,6 +1156,9 @@ export class VoiceSession {
   private teardown(): void {
     this.epoch += 1 // invalidates every callback still in flight
     this.active = false
+    this.summarizing?.abort()
+    this.summarizing = null
+    this.searching = false
     this.clearDuckTimer()
     if (this.releaseTimer) clearTimeout(this.releaseTimer)
     this.releaseTimer = null

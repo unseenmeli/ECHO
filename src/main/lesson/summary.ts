@@ -99,13 +99,16 @@ export function summarizeSelection(selected: BoardElement[]): SelectionItem[] {
 }
 
 /** What the tutor is told about the board: element ids (so it can reference them), labels and the user's own drawings. */
+/** Links listed per block (blocks and nodes are already capped by summarizeBoard): keeps the context compact. */
+const MAX_LINKS = 10
+
 export function describeBoardForTutor(summary: BoardSummary, selection: SelectionItem[]): string {
   const lines: string[] = []
   if (!summary.blocks.length && !summary.userCount) lines.push('The whiteboard is empty.')
   for (const b of summary.blocks) {
     const parts = [`${b.kind} id=${b.id}${b.title ? ` "${b.title}"` : ''}`]
     if (b.nodes.length) parts.push(`nodes: ${b.nodes.map((n) => `${n.id} (${n.label})`).join(', ')}`)
-    if (b.edges.length) parts.push(`links: ${b.edges.map((e) => `${e.from}→${e.to}${e.label ? ` (${e.label})` : ''}`).join('; ')}`)
+    if (b.edges.length) parts.push(`links: ${b.edges.slice(0, MAX_LINKS).map((e) => `${e.from}→${e.to}${e.label ? ` (${e.label})` : ''}`).join('; ')}${b.edges.length > MAX_LINKS ? `, +${b.edges.length - MAX_LINKS} more` : ''}`)
     lines.push(`- ${parts.join(' | ')}`)
   }
   if (summary.userCount) {

@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { FramePayload, SharingState } from '../shared/screen'
+import type { PreferenceEvent } from '../shared/preferences'
 import type { VoiceEvent } from '../shared/voice'
+import type { PreferencesApi } from './preferencesBridge'
 import type { VoiceApi } from './voiceBridge'
 
 // Subscribe to a main-process channel; returns an unsubscribe function.
@@ -38,6 +40,7 @@ contextBridge.exposeInMainWorld('companion', api)
 const voiceApi: VoiceApi = {
   command: (cmd) => ipcRenderer.send('voice:command', cmd),
   getState: () => ipcRenderer.invoke('voice:get-state'),
+  openLink: (url) => ipcRenderer.send('voice:open-link', url),
   onEvent: (cb) => {
     const listener = (_e: unknown, event: VoiceEvent): void => cb(event)
     ipcRenderer.on('voice:event', listener)
@@ -45,5 +48,16 @@ const voiceApi: VoiceApi = {
   }
 }
 contextBridge.exposeInMainWorld('voice', voiceApi)
+// Saved-preference bridge: the "Preference saved · Undo" toast (see PreferenceToast).
+const preferencesApi: PreferencesApi = {
+  get: () => ipcRenderer.invoke('prefs:get'),
+  command: (cmd) => ipcRenderer.invoke('prefs:command', cmd),
+  onEvent: (cb) => {
+    const listener = (_e: unknown, event: PreferenceEvent): void => cb(event)
+    ipcRenderer.on('prefs:event', listener)
+    return () => ipcRenderer.removeListener('prefs:event', listener)
+  }
+}
+contextBridge.exposeInMainWorld('preferences', preferencesApi)
 
 export type CompanionApi = typeof api

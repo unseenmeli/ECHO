@@ -8,6 +8,7 @@ import { createBoardController } from './boardController'
 import avatarSrc from '../assets/echo-avatar.png'
 import characterSrc from '../assets/poses/frame-1.png'
 import { VoiceDock } from '../voice/VoiceDock'
+import { PreferenceToast } from '../preferences/PreferenceToast'
 
 const SAVE_DELAY_MS = 250
 const isMac = navigator.platform.startsWith('Mac')
@@ -137,6 +138,7 @@ export function TutorWindow() {
         )}
       </main>
       <VoiceDock />
+      <PreferenceToast className="tutor-toast" />
     </div>
   )
 }

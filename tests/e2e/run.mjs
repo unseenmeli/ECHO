@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import electronPath from 'electron'
-import { startFakes } from './fake-services.mjs'
+import { isTutorRequest, startFakes } from './fake-services.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const wavPath = path.resolve(process.argv[2])
@@ -538,7 +538,7 @@ const scenarios = {
       // After the explanation, highlights are cleaned away.
       await until(async () => !(await sceneSummary()).elements.some((e) => e.id.startsWith('echo:hl_')), 8000, 'highlights cleared')
       check('highlight rings are removed when the explanation ends, the diagram stays', (await sceneSummary()).elements.some((e) => e.id === 'echo:browser'))
-      check('one tutor request writes both narration and drawing: no second model call', fakes.log.claude.requests.length === 1 && !fakes.log.claude.requests[0].tools && /LESSON MODE/.test(String(fakes.log.claude.requests[0].system)), String(fakes.log.claude.requests.length))
+      check('one tutor request writes both narration and drawing: no second model call', fakes.log.claude.requests.length === 1 && isTutorRequest(fakes.log.claude.requests[0]) && /LESSON MODE/.test(String(fakes.log.claude.requests[0].system)), String(fakes.log.claude.requests.length))
       check('no keys in logs', !logs.includes('test-anthropic-key'))
       lp.close()
     } finally {
@@ -579,8 +579,8 @@ const scenarios = {
       check('everything already shown stays on the board', ['browser', 'dns', 'server'].every((n) => after.elements.some((e) => e.id === 'echo:' + n)))
       check('the board did not change at all after the interruption', after.elements.length === before.elements.length)
       fakes.fluxSend({ type: 'TurnInfo', event: 'EndOfTurn', turn_index: 1, transcript: 'Wait, just tell me about the DNS part.', trigger: 'model' })
-      await until(() => fakes.log.claude.requests.filter((r) => !r.tools).length >= 2, 8000, 'follow-up tutor request')
-      const follow = fakes.log.claude.requests.filter((r) => !r.tools)[1]
+      await until(() => fakes.log.claude.requests.filter(isTutorRequest).length >= 2, 8000, 'follow-up tutor request')
+      const follow = fakes.log.claude.requests.filter(isTutorRequest)[1]
       const lastMsg = follow.messages.at(-1).content
       check('the follow-up tutor request carries the board and where the user cut in', /lesson_context/.test(lastMsg) && /Fetching|diagram/i.test(lastMsg) && /interrupted during s1/.test(lastMsg), lastMsg.slice(-500))
     } finally {

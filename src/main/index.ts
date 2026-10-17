@@ -6,6 +6,9 @@ import { attachScreenHost, registerScreenIpc, screenContext } from './screenCont
 import { createTray } from './tray'
 import windowIconPath from '../../resources/icon.png?asset'
 import { voiceHost } from './voice/host'
+import { registerPreferenceIpc } from './memory/preferenceIpc'
+import { PreferenceStore } from './memory/preferenceStore'
+import { openPreferencesWindow, preferencesWindow } from './preferencesWindow'
 
 const COMPANION_WIDTH = 150
 // Tall enough for the "Watching" pill above the character.
@@ -203,12 +206,21 @@ if (!app.requestSingleInstanceLock()) {
 
     registerBoardIpc()
     registerScreenIpc(() => [companion, lesson].filter((w): w is BrowserWindow => !!w && !w.isDestroyed()))
+    // What ECHO remembers about how to teach this learner: a small file in the user-data folder.
+    const preferences = new PreferenceStore(join(app.getPath('userData'), 'preferences.json'))
+    registerPreferenceIpc(preferences, () =>
+      [companion, lesson, preferencesWindow()].filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
+    )
     voiceHost.register({
       canCaptureScreen: (wc) => !!companion && !companion.isDestroyed() && wc === companion.webContents,
       openLesson: (timeoutMs) => {
         openLessonWindow()
         return whenBoardReady(timeoutMs)
-      }
+      },
+      closeLesson: () => {
+        if (lesson && !lesson.isDestroyed()) lesson.close()
+      },
+      preferences
     })
     companion = createCompanionWindow()
 
@@ -219,6 +231,7 @@ if (!app.requestSingleInstanceLock()) {
         else showCompanion()
       },
       openLesson: openLessonWindow,
+      openPreferences: openPreferencesWindow,
       screen: {
         state: screenContext.state,
         start: screenContext.requestStart,

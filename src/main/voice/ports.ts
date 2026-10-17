@@ -1,4 +1,5 @@
 import type { ChatMessage } from './history'
+import type { SourceLink } from '../../shared/voice'
 
 // Narrow interfaces the session depends on. The real implementations talk to
 // Deepgram and Anthropic; the session tests plug in controllable fakes here.
@@ -56,8 +57,52 @@ export interface ScreenImage {
   data: string
 }
 
+/** A function the model may call while it answers. Calls are fire-and-forget: the model never sees a result. */
+export interface ChatTool {
+  name: string
+  description: string
+  input_schema: { type: 'object'; properties: Record<string, unknown>; required: string[] }
+}
+
+export interface ToolCall {
+  name: string
+  input: unknown
+}
+
+/** What came back besides the streamed text: for the UI (sources), the log (usage) and honesty (failures). */
+export interface ChatResult {
+  /** The model id the API reports having used (compare with the one requested). */
+  model: string
+  stopReason: string | null
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number; searches: number }
+  sources: SourceLink[]
+  /** Error codes from web searches that failed (the reply continued without them). */
+  searchErrors: string[]
+  codeRuns: number
+}
+
 export interface ChatRequest {
+  /** Stable instructions. Cached, so keep anything that changes per turn out of it. */
   system: string
+  /** Small per-session additions after the cached part (saved preferences). */
+  systemTail?: string
+  /** Text added to the latest user message only, for this request (screen notes, board state, a filler already spoken). */
+  turnContext?: string
+  /** Prompt caching on the system prompt and the conversation so far. On by default. */
+  cache?: boolean
+  /** 'adaptive' lets the model think before answering (deep explanations); 'off' keeps the first word fast. */
+  reasoning?: 'off' | 'adaptive'
+  effort?: 'low' | 'medium' | 'high'
+  /** Offer Anthropic's hosted code execution sandbox (runs on Anthropic's servers, never on this machine). */
+  codeExecution?: boolean
+  onResult?(result: ChatResult): void
+  /** Let the model search the web, at most this many times, for this request. Runs on Anthropic's side. */
+  webSearch?: { maxUses: number }
+  /** The model has started a web search (a quick answer may go quiet for a few seconds until it finishes). */
+  onSearchStart?(): void
+  tools?: ChatTool[]
+  /** Called once per tool the model called, after its reply has finished streaming. */
+  onToolUse?(call: ToolCall): void
   /** Overrides the configured reply budget (lesson replies carry segment markup). */
   maxTokens?: number
   /** Use the deep-dive model for this request. */
@@ -73,7 +118,8 @@ export interface ChatPort {
   stream(req: ChatRequest): Promise<void>
 }
 
-export type ChatErrorKind = 'auth' | 'rate-limit' | 'network' | 'other'
+/** 'tool-unavailable': the API refused a server tool (web search / code execution not enabled); retry without it. */
+export type ChatErrorKind = 'auth' | 'rate-limit' | 'network' | 'tool-unavailable' | 'other'
 
 export class ChatError extends Error {
   constructor(

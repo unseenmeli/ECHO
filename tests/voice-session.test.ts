@@ -266,7 +266,7 @@ describe('voice session', () => {
     await flushMicrotasks()
     const second = chat.calls[1].messages
     const assistant = second.find((m) => m.role === 'assistant')
-    expect(assistant?.content).toBe('A variable is a named box that holds a value.')
+    expect(assistant?.content).toBe('A variable is a named box that holds a value. [cut off here: the learner interrupted]')
     expect(second.at(-1)).toEqual({ role: 'user', content: 'Wait explain that more simply' })
     expect(session.getEntries().find((e) => e.id === 'r1')?.interrupted).toBe(true)
 
@@ -294,7 +294,7 @@ describe('voice session', () => {
 
     const msgs = chat.calls[1].messages
     expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
-    expect(msgs[1].content).toBe('One two three four')
+    expect(msgs[1].content).toBe('One two three four [cut off here: the learner interrupted]')
   })
 
   it('an interruption before anything was heard still counts the question as asked', async () => {
@@ -623,6 +623,33 @@ describe('screen context', () => {
     await flushMicrotasks()
   }
 
+  it('shows the sources of a searched answer and remembers which sites it cited for follow-ups', async () => {
+    const b = setup(watching(false))
+    b.ready()
+    b.chat.next(async (req) => {
+      await reply('Node 24 is the current LTS release.')(req)
+      req.onResult?.({
+        model: 'claude-haiku-5-5',
+        stopReason: 'end_turn',
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, searches: 1 },
+        sources: [{ title: 'Node.js releases', url: 'https://nodejs.org/en/about/previous-releases', cited: true }],
+        searchErrors: [],
+        codeRuns: 0
+      })
+    })
+    await ask(b, 'What is the latest Node LTS?')
+    const tts = b.ttss.at(-1)!
+    tts.flushed('r1', 0)
+    b.session.onPlayback({ kind: 'started', responseId: 'r1', at: 1 })
+    b.session.onPlayback({ kind: 'ended', responseId: 'r1', at: 2 })
+    const entry = b.session.getEntries().find((e) => e.id === 'r1')!
+    expect(entry.sources).toEqual([{ title: 'Node.js releases', url: 'https://nodejs.org/en/about/previous-releases', cited: true }])
+    b.chat.next(reply('From the Node.js site.'))
+    await ask(b, 'Where is that from?', 1)
+    expect(b.chat.calls[1].messages[1].content).toBe('Node 24 is the current LTS release. [sources: nodejs.org]')
+    expect(b.chat.calls[1].webSearch).toEqual({ maxUses: 2 })
+  })
+
   it('says a filler line right away, then answers with the screenshot attached', async () => {
     const b = setup(watching())
     b.ready()
@@ -638,7 +665,7 @@ describe('screen context', () => {
 
     await flushMicrotasks()
     expect(b.chat.calls[0].image).toEqual(SHOT)
-    expect(b.chat.calls[0].system).toContain('<already_said>')
+    expect(b.chat.calls[0].turnContext).toContain('<already_said>')
     expect(tts.spoken.slice(1).join('')).toContain('It is a login form.')
 
     // The filler is heard but is not part of the conversation history.
@@ -657,7 +684,7 @@ describe('screen context', () => {
     await ask(b, 'What is a variable?')
     expect(b.ttss.at(-1)!.spoken.join('')).toBe('A variable holds a value. ')
     expect(b.chat.calls[0].image).toEqual(SHOT)
-    expect(b.chat.calls[0].system).not.toContain('<already_said>')
+    expect(b.chat.calls[0].turnContext).not.toContain('<already_said>')
   })
 
   it('no filler or screenshot when the screen is not shared', async () => {
@@ -667,7 +694,7 @@ describe('screen context', () => {
     await ask(b, 'Can you see my screen?')
     expect(b.ttss.at(-1)!.spoken.join('')).toBe("I can't see your screen yet. ")
     expect(b.chat.calls[0].image).toBeUndefined()
-    expect(b.chat.calls[0].system).toContain('Not sharing.')
+    expect(b.chat.calls[0].turnContext).toContain('Not sharing.')
   })
 
   it('an interruption during the filler keeps the question open', async () => {

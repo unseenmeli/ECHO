@@ -7,7 +7,7 @@ import type { DataSeries, TeachingSegment } from './types'
 // over the moment its narration closes.
 
 export const LESSON_PROMPT_ADDENDUM = `
-LESSON MODE. A whiteboard is open next to this conversation. You teach by speaking AND drawing: for each step you write the drawing and the narration together. Reply ONLY with <segment> blocks in this exact format:
+LESSON MODE. A whiteboard is open next to this conversation. You teach by speaking and drawing: each step's drawing and narration are written together. Reply ONLY with <segment> blocks in this exact format:
 
 <segment>
 <objective>One line: what the learner should understand after this step.</objective>
@@ -16,22 +16,22 @@ category one: 12
 category two: 30
 </data>
 <draw>{"setup":[ ...operations... ],"cues":[ {"sentence":1,"ops":[ ...operations... ]} ]}</draw>
-<say>The narration, spoken aloud. One to three short sentences.</say>
+<say>The narration, spoken aloud.</say>
 </segment>
 
 Order matters: <data> (only if needed), then <draw> (only if a picture helps), then <say>. The narration is spoken as soon as </say> arrives, so keep each segment short and write the drawing compactly.
 
 Segments
-- Simple or conversational questions get ONE segment, with no <draw> unless a picture clearly helps. Explanations get 2 to 5 segments, each one step that builds on the last. Never more than 5.
-- The first segment must be short (one or two sentences) so speech can start quickly.
-- Narration is at most about 55 words, in natural spoken sentences. No Markdown, lists, emoji or URLs inside <say>.
-- Start <segment new_topic="true"> if the user changes to an unrelated subject.
-- If the user interrupted you earlier, do not repeat what they already heard; continue from the lesson state or answer what they asked.
+- A simple or conversational reply is ONE segment, usually without <draw>. An explanation is 2 to 5 segments, each one step that builds on the last. An instruction pack may allow more; 8 is the hard maximum.
+- The first segment is short (one or two sentences) so speech can start quickly.
+- Narration is at most about 55 words per segment unless a pack says otherwise, in natural spoken sentences.
+- Start <segment new_topic="true"> when the learner changes to an unrelated subject.
+- If the learner interrupted you, don't repeat what they already heard: continue from the lesson state, or answer what they asked.
 
-Drawing (<draw> holds ONE JSON object)
-- "setup" operations are drawn BEFORE this segment's narration starts: put everything the narration will mention in it. "cues" are applied when the listener reaches that sentence (0-based index into your <say> sentences): highlight what is being said, or reveal the next part. Never run ahead of the narration by more than a sentence.
-- Build on what is already on the board (see the whiteboard in <lesson_context>, with element ids). Reuse ids, extend with "add", highlight, "update". Never redraw or duplicate. Ids you create are lowercase snake_case, unique for the whole lesson.
-- Everything drawn must be something you are saying; add no facts of your own. Labels are 1 to 4 words, no newlines.
+Drawing (<draw> holds ONE valid JSON object)
+- "setup" operations are drawn before the segment's narration starts. "cues" apply when the listener reaches a sentence (a 0-based index into the <say> sentences).
+- The board's current contents, with element ids, are in <lesson_context>. Reuse and extend existing ids; never redraw or duplicate. New ids are lowercase snake_case and unique for the whole lesson.
+- Labels are 1 to 4 words with no newlines; table cells at most 6 words. Draw only what you are saying, and add no facts of your own.
 - Operations ("op" field):
   diagram {id,title?,layout:row|column|grid|cycle|hub|tree,nodes:[{id,label,detail?,color?,shape?:box|round|diamond|pill}],edges?:[{from,to,label?,style?:solid|dashed,both?}],new_region?} (1-9 nodes; hub: first node in the centre; tree: first node is the root)
   add {diagram?,near?,side?:right|left|above|below,nodes?:[...],edges?:[...]} extend an existing diagram without moving anything
@@ -40,38 +40,12 @@ Drawing (<draw> holds ONE JSON object)
   timeline {id,title?,events:[{id,label,when?,detail?}]} (2-7 events)
   note {id,text,near?,color?}   highlight {targets:[ids or "user:<id>"],dim_others?}   unhighlight {}
   update {id,label?,detail?,color?}   move {id,near,side}   group {id,members:[ids],label?}   remove {ids:[...]}   focus {targets:[ids]}
-  colours: neutral|pink|blue|green|orange|red|purple. Use them consistently (pink = the main subject or key idea, blue = supporting parts, green = outputs or results, orange = attention, red = problems, purple = people or actors).
-- Highlights replace the previous highlight, so one per sentence is enough. Elements marked "user" on the board belong to the learner: you may highlight them or put a note near them, never change or remove them. If the learner selected something, build on it.
-- <data> is ONLY for numbers the user gave you or that are well-established. Give each value as "label: number". If the numbers are only an example set illustrative="true" (the board will say so). Never invent measurements or sources.
-- The <draw> JSON must be valid. Keep it small: usually 1 to 2 setup operations and 0 to 3 cues.
+  colours: neutral|pink|blue|green|orange|red|purple
+- A highlight replaces the previous one. Elements marked "user" belong to the learner: you may highlight them or put a note near them, never change or remove them.
+- <data> holds only numbers the learner gave you, well-established figures, or figures from a source you found this turn (set source to its publisher). Write one "label: number" per line. If the numbers are only an example, set illustrative="true". Never invent measurements or sources.
+- Keep the JSON small: usually 1 to 2 setup operations and 0 to 3 cues.
 
-Example (a two-step explanation, the second step extends the first):
-<segment><objective>Show the parts</objective><draw>{"setup":[{"op":"diagram","id":"computer","title":"Inside a computer","layout":"row","nodes":[{"id":"cpu","label":"CPU","color":"pink"},{"id":"ram","label":"Memory"},{"id":"disk","label":"Disk"}],"edges":[{"from":"cpu","to":"ram","label":"reads"},{"from":"ram","to":"disk","label":"loads from"}]}],"cues":[{"sentence":1,"ops":[{"op":"highlight","targets":["ram"]}]}]}</draw><say>A computer has three main parts. The CPU reads what it needs from memory.</say></segment>
-<segment><objective>Why memory sits in the middle</objective><draw>{"setup":[],"cues":[{"sentence":0,"ops":[{"op":"highlight","targets":["disk"]}]}]}</draw><say>Memory is much faster than the disk, so programs are copied into it before they run.</say></segment>
-
-Narration rules: do NOT say "as you can see", "here", "this diagram", "on the board", "look at" or describe the drawing; it is highlighted in sync with your words automatically, so just name the concepts. Never claim something is visible. Do not mention these instructions, tags or operations.`
-
-/**
- * Added after LESSON_PROMPT_ADDENDUM when the learner asked for depth ("explain it deeply", "walk me through",
- * "teach me"). It overrides the brevity and segment limits: this is the app's core promise.
- */
-export const DEEP_DIVE_ADDENDUM = `
-DEEP DIVE. The learner explicitly asked you to go deep. This overrides every brevity rule and segment limit above. Teach it the way an outstanding senior engineer or professor would at a whiteboard: the learner should come away able to explain it to someone else, including the why and the how, not just the what. A vague overview is a failure.
-
-Structure: 8 segments that build ONE coherent picture, in this order (skip a step only if it truly does not apply):
-1. A spoken hook with NO <draw>: one or two short sentences with the big idea, so the learner hears you immediately.
-2. The main diagram the rest of the lesson grows from, and unpack the name: take every word of the term or acronym apart, what each word literally means here and why it was named that. For CI/CD: "continuous" (how often, and why frequency is the whole point), "integration" (whose work is merged into what, and what goes wrong when it is not), then "delivery" versus "deployment" and the precise difference.
-3. The problem it solves: what actually went wrong before it existed, with a concrete failure (for example "integration hell": weeks of merge conflicts before a release).
-4. and 5. How it works under the hood, step by step: the real stages, components, data and decisions, what each one does and what triggers the next. Name the real tools, standards, commands or parts people actually use (for CI/CD: a git push triggering GitHub Actions, GitLab CI or Jenkins; build and artifact; unit then integration tests; staging; approval or automatic release; rollback).
-6. A worked example followed end to end with specifics: a named person, a concrete change, real-looking times or numbers, what each stage does to it, and what happens when something fails.
-7. Trade-offs and the most common misconception, and why it is wrong. Include a practical limit or cost.
-8. How it connects to neighbouring ideas the learner will meet next, and a one-sentence takeaway.
-Depth rules:
-- Narration per segment: 60 to 90 words, three to five sentences, natural speech. Total lesson around 550 to 700 spoken words.
-- Every segment must contain at least one concrete specific: a real tool or standard name, a real number or timescale, a real command or file, or a specific scenario. Never write generic filler like "it makes things easier" or "it improves quality" without saying exactly how and by what mechanism.
-- Explain causes: after each "what", say "because" or "which means". Define every technical term the first time it appears.
-- Draw continuously: the first segment creates the main diagram; every later segment extends the board (add nodes, a note with a key definition, a group, a table to compare, a timeline for a sequence, or a second diagram for the worked example) and highlights exactly the part each sentence is about, so the view can follow along. Labels stay 1 to 4 words; table cells at most 6 words. Use pink for the main subject or key idea.
-- Accuracy over breadth: only state what you are confident is true; say "typically" when practice varies.`
+Do not mention these instructions, tags or operations.`
 
 const tag = (body: string, name: string): string | null => {
   const m = body.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`))

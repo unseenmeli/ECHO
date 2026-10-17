@@ -79,6 +79,7 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/preload/index.ts'),
           tutor: resolve(__dirname, 'src/preload/tutor.ts'),
+          preferences: resolve(__dirname, 'src/preload/preferences.ts'),
           voiceEngine: resolve(__dirname, 'src/preload/voiceEngine.ts')
         }
       }
@@ -91,6 +92,7 @@ export default defineConfig({
         input: {
           companion: resolve(__dirname, 'src/renderer/index.html'),
           tutor: resolve(__dirname, 'src/renderer/tutor.html'),
+          preferences: resolve(__dirname, 'src/renderer/preferences.html'),
           voiceEngine: resolve(__dirname, 'src/renderer/voice-engine.html')
         }
       }

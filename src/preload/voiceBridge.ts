@@ -9,4 +9,6 @@ export interface VoiceApi {
   command(cmd: VoiceCommand): void
   getState(): Promise<VoiceStateReply | null>
   onEvent(cb: (event: VoiceEvent) => void): () => void
+  /** Opens a source link in the default browser (http/https only; checked again in the main process). */
+  openLink(url: string): void
 }
