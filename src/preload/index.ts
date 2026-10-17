@@ -4,7 +4,9 @@ import { contextBridge, ipcRenderer } from 'electron'
 // the renderer; add narrowly scoped methods here as features land.
 const api = {
   ask: (): void => ipcRenderer.send('companion:ask'),
-  next: (): void => ipcRenderer.send('companion:next')
+  next: (): void => ipcRenderer.send('companion:next'),
+  dragStart: (): void => ipcRenderer.send('companion:drag-start'),
+  dragMove: (dx: number, dy: number): void => ipcRenderer.send('companion:drag-move', dx, dy)
 }
 
 contextBridge.exposeInMainWorld('companion', api)

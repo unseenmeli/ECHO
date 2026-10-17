@@ -25,6 +25,9 @@ function createCompanionWindow(): BrowserWindow {
     fullscreenable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
+    // macOS: let the first click on the (usually unfocused) companion start a
+    // drag or press a button, instead of only focusing the window.
+    acceptFirstMouse: true,
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -61,6 +64,19 @@ ipcMain.on('companion:ask', () => {
 })
 ipcMain.on('companion:next', () => {
   console.log('[companion] > pressed')
+})
+
+// Window dragging. The renderer sends the cursor offset since drag start;
+// applying it to the origin (rather than summing deltas) avoids drift.
+let dragOrigin: [number, number] | null = null
+
+ipcMain.on('companion:drag-start', () => {
+  if (companion) dragOrigin = companion.getPosition() as [number, number]
+})
+ipcMain.on('companion:drag-move', (_event, dx: unknown, dy: unknown) => {
+  if (!companion || !dragOrigin || typeof dx !== 'number' || typeof dy !== 'number') return
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) return
+  companion.setPosition(Math.round(dragOrigin[0] + dx), Math.round(dragOrigin[1] + dy))
 })
 
 app.whenReady().then(() => {
