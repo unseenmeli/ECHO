@@ -1,8 +1,31 @@
+/* iOS-flavoured (think Freeform): frosted glass bars and panels, system type,
+   continuous corners and soft shadows. Character details carry over from the
+   companion: dot paper, the pink "echo" afterimages from the app icon, a pixel
+   face for small labels, and hot pink as a sparing tint colour. */
 :root {
-  --paper: #f3f1ea;
-  --ink: #151514;
-  --glass-bg: rgba(243, 241, 234, 0.82);
-  --glass-border: rgba(0, 0, 0, 0.08);
+  --paper: #f5f4f0;
+  --dot: rgba(60, 60, 67, 0.16);
+  --label: #1c1c1e;
+  --label-secondary: rgba(60, 60, 67, 0.6);
+  --fill: rgba(118, 118, 128, 0.12);
+  --fill-strong: rgba(118, 118, 128, 0.2);
+  --separator: rgba(60, 60, 67, 0.14);
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-strong: rgba(255, 255, 255, 0.86);
+  --glass-blur: blur(24px) saturate(1.8);
+  --glass-edge: inset 0 0 0 0.5px rgba(255, 255, 255, 0.7);
+  --shadow-float: 0 10px 30px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.06), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --shadow-segment: 0 3px 8px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0, 0, 0, 0.04);
+  --pink: #ff2e9a;
+  --pink-deep: #c41f74;
+  --pink-tint: rgba(255, 46, 154, 0.12);
+  --pink-tint-strong: rgba(255, 46, 154, 0.2);
+  --radius-panel: 16px;
+  --radius-control: 10px;
+  --titlebar-height: 52px;
+  --system-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable', 'Segoe UI', system-ui,
+    sans-serif;
+  --pixel-font: 'Silkscreen', ui-monospace, monospace;
 }
 
 * {
@@ -15,10 +38,9 @@ body,
   margin: 0;
   height: 100%;
   background: var(--paper);
-  color: var(--ink);
+  color: var(--label);
   overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable', 'Segoe UI', system-ui,
-    sans-serif;
+  font-family: var(--system-font);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -27,52 +49,87 @@ body,
   height: 100%;
 }
 
-/* Title bar: draggable glass strip. The OS draws caption buttons / traffic
-   lights over its ends, so reserve their space. */
+/* ---- Title bar ---------------------------------------------------------- */
+
+/* Frosted glass over the board, which scrolls underneath it. The OS draws
+   caption buttons / traffic lights over its ends, so reserve their space. */
 .tutor-titlebar {
   position: absolute;
   inset: 0 0 auto 0;
   z-index: 10;
-  height: 52px;
+  height: var(--titlebar-height);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   padding: 0 16px;
   padding-right: calc(100vw - env(titlebar-area-width, 100vw) + 16px);
-  background: var(--glass-bg);
-  backdrop-filter: blur(18px) saturate(1.4);
-  border-bottom: 0.5px solid var(--glass-border);
+  background: var(--glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: 0 0.5px 0 var(--separator);
   -webkit-app-region: drag;
   user-select: none;
 }
 
 .platform-mac .tutor-titlebar {
-  padding-left: 84px;
+  padding-left: 88px;
 }
 
-.tutor-seal {
-  width: 26px;
-  height: 26px;
+/* App-icon squircle with two pink afterimages trailing left, as on the icon. */
+.tutor-avatar {
+  width: 28px;
+  height: 28px;
+  margin-left: 8px;
   border-radius: 7px;
-  display: grid;
-  place-items: center;
-  background: var(--ink);
-  color: var(--paper);
-  font-size: 14px;
-  font-weight: 600;
+  box-shadow:
+    -4px 0 0 0 rgba(255, 46, 154, 0.85),
+    -8px 0 0 0 rgba(255, 46, 154, 0.3),
+    0 1px 3px rgba(0, 0, 0, 0.18);
 }
 
 .tutor-titlebar h1 {
   margin: 0;
-  font-size: 14px;
+  display: flex;
+  align-items: center;
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: -0.01em;
+  line-height: 1;
 }
 
-/* The whiteboard fills the window; Excalidraw tracks its container's size. */
+/* An iOS text caret, tinted pink. */
+.tutor-cursor {
+  width: 2px;
+  height: 17px;
+  margin-left: 3px;
+  border-radius: 1px;
+  background: var(--pink);
+  animation: cursor-blink 1.1s ease-in-out infinite;
+}
+
+@keyframes cursor-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  55%,
+  95% {
+    opacity: 0;
+  }
+}
+
+/* ---- Board -------------------------------------------------------------- */
+
+/* Fills the window, under the title bar. The canvas is transparent so this
+   dot paper shows through; the --paper-* properties follow the scene camera
+   so the dots pan and zoom with the drawing. */
 .tutor-board {
   position: absolute;
-  inset: 52px 0 0 0;
+  inset: 0;
+  background-color: var(--paper);
+  background-image: radial-gradient(circle, var(--dot) 1.1px, transparent 1.6px);
+  background-size: calc(24px * var(--paper-zoom, 1)) calc(24px * var(--paper-zoom, 1));
+  background-position: var(--paper-x, 0) var(--paper-y, 0);
 }
 
 .tutor-board .excalidraw {
@@ -80,6 +137,263 @@ body,
   width: 100%;
 }
 
+/* Keep Excalidraw's top controls and sidebar clear of the title bar. */
+.tutor-board .excalidraw .FixedSideContainer_side_top {
+  top: calc(var(--titlebar-height) + var(--editor-container-padding, 16px));
+}
+
+/* Excalidraw sizes the properties panel inline as (board height - 166px),
+   which doesn't know about the title bar overlap. */
+.tutor-board .excalidraw .App-menu__left {
+  max-height: calc(100vh - 166px - var(--titlebar-height)) !important;
+}
+
+.tutor-board .excalidraw .sidebar {
+  top: var(--titlebar-height);
+  height: calc(100% - var(--titlebar-height));
+}
+
+/* Excalidraw theme. Pink is the tint colour (active tool, selection, focus);
+   everything else uses iOS system greys. */
+.tutor-board .excalidraw,
+.tutor-board .excalidraw.theme--light {
+  --color-primary: var(--pink);
+  --color-primary-darker: #f0168a;
+  --color-primary-darkest: var(--pink-deep);
+  --color-primary-hover: #f0168a;
+  --color-primary-light: var(--pink-tint);
+  --color-primary-light-darker: var(--pink-tint-strong);
+  --color-brand-hover: #f0168a;
+  --color-brand-active: var(--pink-deep);
+  --color-surface-primary-container: var(--pink-tint);
+  --color-on-primary-container: var(--pink-deep);
+  --color-selection: var(--pink);
+  --select-highlight-color: var(--pink);
+  --focus-highlight-color: var(--pink-tint-strong);
+  --link-color: var(--pink-deep);
+
+  --color-surface-lowest: #ffffff;
+  --color-surface-low: #f2f2f7;
+  --color-surface-mid: #f2f2f7;
+  --color-surface-high: rgba(118, 118, 128, 0.12);
+  --color-on-surface: var(--label);
+  --island-bg-color: var(--glass-strong);
+  --default-bg-color: #ffffff;
+  --input-bg-color: #ffffff;
+  --input-hover-bg-color: #f2f2f7;
+  --input-border-color: var(--separator);
+  --popup-bg-color: var(--glass-strong);
+  --popup-secondary-bg-color: #f2f2f7;
+  --overlay-bg-color: rgba(245, 244, 240, 0.86);
+  --button-gray-1: #f2f2f7;
+  --button-gray-2: #e5e5ea;
+  --button-gray-3: #c7c7cc;
+  --default-border-color: var(--separator);
+  --sidebar-border-color: var(--separator);
+  --sidebar-bg-color: var(--glass-strong);
+  --dialog-border-color: var(--separator);
+  --color-slider-track: var(--pink-tint-strong);
+  --color-slider-thumb: #ffffff;
+
+  --ui-font: var(--system-font);
+  --border-radius-md: 8px;
+  --border-radius-lg: var(--radius-control);
+  --shadow-island: var(--shadow-float);
+}
+
+/* Floating glass panels: toolbar, properties, menus and button groups. */
+.tutor-board .excalidraw :is(.Island, .dropdown-menu-container, .sidebar) {
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.tutor-board .excalidraw .Island {
+  border-radius: var(--radius-panel);
+}
+
+.tutor-board .excalidraw .dropdown-menu-container {
+  border-radius: 14px;
+  box-shadow: var(--shadow-float);
+}
+
+.tutor-board .excalidraw :is(.main-menu-trigger, .default-sidebar-trigger, .zoom-actions, .undo-redo-buttons, .help-icon) {
+  background: var(--glass-strong);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-float);
+  border-radius: 12px;
+}
+
+.tutor-board .excalidraw :is(.zoom-actions, .undo-redo-buttons) .ToolIcon {
+  background: transparent;
+}
+
+.tutor-board .excalidraw :is(.main-menu-trigger, .default-sidebar-trigger, .help-icon, .zoom-actions .ToolIcon, .undo-redo-buttons .ToolIcon):hover {
+  background: var(--fill);
+}
+
+/* Toolbar buttons: rounded tiles; the active tool takes the pink tint. */
+.tutor-board .excalidraw .App-toolbar .ToolIcon__icon {
+  border-radius: var(--radius-control);
+}
+
+/* Option groups in the properties panel as iOS segmented controls: a grey
+   track with the selected segment raised in white. */
+.tutor-board .excalidraw .buttonList {
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--fill);
+  width: fit-content;
+}
+
+.tutor-board .excalidraw .buttonList :is(button, label) {
+  background: transparent;
+  border-radius: 7px;
+  box-shadow: none;
+}
+
+.tutor-board .excalidraw .buttonList :is(button, label):hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.tutor-board .excalidraw .buttonList :is(button, label).active {
+  background: #ffffff;
+  color: var(--label);
+  box-shadow: var(--shadow-segment);
+}
+
+.tutor-board .excalidraw .buttonList :is(button, label).active svg {
+  color: var(--label);
+}
+
+/* Colour swatches as circles. */
+.tutor-board .excalidraw .color-picker__button {
+  border-radius: 50%;
+}
+
+/* Library sidebar: segmented tabs, a pixel-face empty label, and an iOS
+   "tinted" button rather than a solid pink one. */
+.tutor-board .excalidraw .sidebar-tab-trigger[data-state='active'] {
+  background: #ffffff;
+  color: var(--label);
+  box-shadow: var(--shadow-segment);
+}
+
+.tutor-board .excalidraw .library-menu-items__no-items__label {
+  color: var(--label);
+  font-family: var(--pixel-font);
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tutor-board .excalidraw .library-menu-items-container__header {
+  color: var(--label);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.tutor-board .excalidraw .library-menu-browse-button {
+  background: var(--pink-tint);
+  color: var(--pink-deep);
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.tutor-board .excalidraw .library-menu-browse-button:hover {
+  background: var(--pink-tint-strong);
+}
+
+/* Tool shortcut numbers in the pixel face. */
+.tutor-board .excalidraw .ToolIcon__keybinding {
+  font-family: var(--pixel-font);
+  font-size: 7px;
+}
+
+/* ---- Empty-board welcome ------------------------------------------------ */
+
+.tutor-board .welcome-screen-center {
+  gap: 20px;
+}
+
+.tutor-board .welcome-screen-center__logo {
+  margin: 0;
+}
+
+.tutor-welcome-art {
+  --art-width: 116px;
+  position: relative;
+  width: var(--art-width);
+  aspect-ratio: 182 / 240;
+}
+
+.tutor-welcome-art img,
+.tutor-welcome-art .echo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.tutor-welcome-art .echo {
+  background: var(--pink);
+  -webkit-mask: var(--character) center / contain no-repeat;
+  mask: var(--character) center / contain no-repeat;
+}
+
+.tutor-welcome-art .echo-1 {
+  transform: translateX(-14px);
+  opacity: 0.5;
+}
+
+.tutor-welcome-art .echo-2 {
+  transform: translateX(-28px);
+  opacity: 0.2;
+}
+
+.tutor-board .welcome-screen-center__heading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 360px;
+  font-family: inherit;
+  text-align: center;
+}
+
+.tutor-welcome-title {
+  font-family: var(--pixel-font);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--label);
+}
+
+.tutor-welcome-body {
+  font-size: 15px;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+  color: var(--label-secondary);
+}
+
+/* Highlighter-pen stroke, not a filled chip. */
+.tutor-welcome-body mark {
+  color: var(--label);
+  font-weight: 600;
+  background: linear-gradient(transparent 58%, rgba(255, 46, 154, 0.22) 58%);
+  padding: 0 2px;
+}
+
+.tutor-board .welcome-screen-decor {
+  color: var(--label-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tutor-cursor {
+    animation: none;
 /* --- Voice dock: floats over the bottom centre of the board ------------------- */
 .voice-dock {
   position: absolute;

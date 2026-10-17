@@ -17,6 +17,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
     "@excalidraw/excalidraw": "^0.18.1",
+    "@fontsource/silkscreen": "^5.3.0",
     "@ricky0123/vad-web": "^0.0.31",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

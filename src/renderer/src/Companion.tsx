@@ -1,5 +1,6 @@
 import { useRef, type PointerEvent } from 'react'
 import { CharacterSprite } from './CharacterSprite'
+import { useScreenWatcher } from './useScreenWatcher'
 import { useVoice } from './voice/useVoice'
 
 // Dragging is done by hand rather than with -webkit-app-region: drag, because
@@ -31,6 +32,28 @@ function useWindowDrag() {
 
 export function Companion() {
   const drag = useWindowDrag()
+  const screen = useScreenWatcher()
+
+  // Questions are about the screen, so the first ? starts sharing.
+  const ask = (): void => {
+    if (screen.status === 'off') void screen.start()
+    else window.companion.ask()
+  }
+
+  return (
+    <main className="companion">
+      {screen.status !== 'off' && (
+        <button
+          className="watch-pill"
+          data-status={screen.status}
+          onClick={screen.togglePause}
+          title={`${screen.status === 'paused' ? 'Resume' : 'Pause'} watching${screen.sourceLabel ? ` · ${screen.sourceLabel}` : ''}`}
+        >
+          <span className="watch-dot" aria-hidden="true" />
+          {screen.status === 'paused' ? 'Paused' : 'Watching'}
+        </button>
+      )}
+
   const { snapshot } = useVoice()
   const voiceOn = snapshot.state !== 'idle' && snapshot.state !== 'error'
   const voiceLabel = voiceOn ? 'End conversation' : 'Start conversation'
@@ -56,6 +79,9 @@ export function Companion() {
         <span className="controls-divider" aria-hidden="true" />
         <button
           className="glass-button"
+          aria-label="Ask a question"
+          title={screen.status === 'off' ? 'Share your screen to ask about it' : 'Ask a question'}
+          onClick={ask}
           aria-label={voiceLabel}
           aria-pressed={voiceOn}
           title={snapshot.state === 'error' && snapshot.message ? snapshot.message : voiceLabel}
