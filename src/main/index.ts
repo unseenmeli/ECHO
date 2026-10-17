@@ -12,6 +12,7 @@ import { STUDY_EXTENSIONS, StudyMaterial } from './study/studyMaterial'
 import { openPreferencesWindow, preferencesWindow } from './preferencesWindow'
 import { registerDraftIpc } from './compose/draftWindow'
 import { AccessCodeStore, registerAccessIpc } from './accessCode'
+import { loadEnvFiles } from './voice/config'
 
 const COMPANION_WIDTH = 150
 // Tall enough for the "Watching" pill above the character.
@@ -224,6 +225,8 @@ if (!app.requestSingleInstanceLock()) {
     // Lives in the menu bar / notification area, not the Dock (packaged macOS
     // builds also set LSUIElement so the Dock icon never flashes at launch).
     app.dock?.hide()
+    // Read .env now, not at the first conversation: Preferences needs ECHO_BACKEND_URL to offer the access code box.
+    loadEnvFiles([app.getAppPath(), process.cwd(), app.getPath('userData')])
 
     registerBoardIpc()
     // The card for emails and posts ECHO drafts, shown beside the companion.

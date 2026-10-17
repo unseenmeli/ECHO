@@ -32,6 +32,7 @@ export type PreferenceMap = Partial<Record<PreferenceKey, PreferenceEntry>>
 
 /** Deepgram Aura-2 voices ECHO can speak with (the first is the app default). */
 export const VOICES = [
+  'aura-2-jupiter-en',
   'aura-2-thalia-en',
   'aura-2-helena-en',
   'aura-2-apollo-en',
