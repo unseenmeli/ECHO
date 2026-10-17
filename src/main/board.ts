@@ -7,17 +7,47 @@ let saved: SavedBoard | null = null
 
 // The window currently hosting the board; requests are routed to it.
 let host: BrowserWindow | null = null
+// The window exists before Excalidraw has loaded; requests sent before then would go unanswered.
+let ready = false
+const readyWaiters = new Set<(ok: boolean) => void>()
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 const REQUEST_TIMEOUT_MS = 10_000
 
+function setReady(next: boolean): void {
+  ready = next
+  for (const w of readyWaiters) w(next)
+  readyWaiters.clear()
+}
+
 export function attachBoardHost(win: BrowserWindow): void {
   host = win
+  ready = false
+  // A reload drops the renderer's request handler until it registers again.
+  win.webContents.on('did-start-loading', () => host === win && (ready = false))
   win.on('closed', () => {
-    if (host === win) host = null
+    if (host === win) {
+      host = null
+      setReady(false)
+    }
     for (const [id, p] of pending) {
       p.reject(new Error('Tutoring window closed'))
       pending.delete(id)
     }
+  })
+}
+
+/** Resolves true once the open lesson window's board answers requests, false if it closes or times out. */
+export function whenBoardReady(timeoutMs: number): Promise<boolean> {
+  if (isBoardOpen()) return Promise.resolve(true)
+  if (!host || host.isDestroyed()) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const done = (ok: boolean): void => {
+      clearTimeout(timer)
+      readyWaiters.delete(done)
+      resolve(ok)
+    }
+    const timer = setTimeout(() => done(false), timeoutMs)
+    readyWaiters.add(done)
   })
 }
 
@@ -49,10 +79,20 @@ export const board: BoardApi = {
   upsertElements: (s) => request('upsertElements', [s]) as ReturnType<BoardApi['upsertElements']>,
   updateElements: (p) => request('updateElements', [p]) as ReturnType<BoardApi['updateElements']>,
   deleteElements: (ids) => request('deleteElements', [ids]) as ReturnType<BoardApi['deleteElements']>,
-  clear: () => request('clear', []) as ReturnType<BoardApi['clear']>
+  clear: () => request('clear', []) as ReturnType<BoardApi['clear']>,
+  applyBatch: (b) => request('applyBatch', [b]) as ReturnType<BoardApi['applyBatch']>
+}
+
+/** True while a lesson window is open and its board is ready to draw on. */
+export function isBoardOpen(): boolean {
+  return !!host && !host.isDestroyed() && ready
 }
 
 export function registerBoardIpc(): void {
+  ipcMain.on('board:ready', (event) => {
+    if (event.sender === host?.webContents) setReady(true)
+  })
+
   ipcMain.on('board:response', (event, id: unknown, ok: unknown, payload: unknown) => {
     if (typeof id !== 'string' || event.sender !== host?.webContents) return
     const p = pending.get(id)
@@ -65,7 +105,10 @@ export function registerBoardIpc(): void {
   ipcMain.on('board:save', (event, scene: unknown) => {
     if (event.sender !== host?.webContents) return
     const s = scene as Partial<SavedBoard> | null
-    if (s && Array.isArray(s.elements) && s.viewport && typeof s.viewport === 'object') saved = s as SavedBoard
+    if (!s || !Array.isArray(s.elements) || !s.viewport || typeof s.viewport !== 'object') return
+    // Picture data only comes along when the set of pictures changed; otherwise keep what we have.
+    const files = s.files && typeof s.files === 'object' ? s.files : saved?.files
+    saved = { elements: s.elements, viewport: s.viewport, ...(files ? { files } : {}) } as SavedBoard
   })
 
   ipcMain.handle('board:load', (event) => (event.sender === host?.webContents ? saved : null))

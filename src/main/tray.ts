@@ -1,12 +1,53 @@
 import { readFileSync } from 'node:fs'
-import { app, Menu, nativeImage, Tray } from 'electron'
-import macIconPath from '../../resources/trayTemplate@2x.png?asset'
-import winIconPath from '../../resources/tray-win.png?asset'
+import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from 'electron'
+import type { SharingState } from '../shared/screen'
+import iconPath from '../../resources/trayTemplate@2x.png?asset'
 
 export interface TrayActions {
   isCompanionVisible(): boolean
   toggleCompanion(): void
   openLesson(): void
+  openPreferences(): void
+  study: {
+    list(): Array<{ id: string; name: string; pages: number; unit: 'page' | 'part'; problem?: string }>
+    add(): void
+    remove(id: string): void
+  }
+  toggleVoice(): void
+  isVoiceActive(): boolean
+  screen: {
+    state(): SharingState
+    start(): void
+    togglePause(): void
+    stop(): void
+    showLatest(): void
+  }
+}
+
+function screenItems({ screen }: TrayActions): MenuItemConstructorOptions[] {
+  const { status, sourceLabel } = screen.state()
+  if (status === 'off') return [{ label: 'Share Screen…', click: screen.start }]
+  return [
+    { label: `${status === 'paused' ? 'Paused' : 'Watching'}${sourceLabel ? ` · ${sourceLabel}` : ''}`, enabled: false },
+    { label: status === 'paused' ? 'Resume Watching' : 'Pause Watching', click: screen.togglePause },
+    { label: 'Stop Sharing', click: screen.stop },
+    { label: 'Show What Echo Sees', click: screen.showLatest }
+  ]
+}
+
+function studyItems({ study }: TrayActions): MenuItemConstructorOptions[] {
+  const files = study.list()
+  const items: MenuItemConstructorOptions[] = [{ label: 'Add Study Material…', click: study.add }]
+  if (files.length) {
+    items.push({
+      label: `Study Material (${files.length})`,
+      submenu: files.map((f) => ({
+        label: `${f.name} · ${f.problem ?? `${f.pages} ${f.unit}${f.pages === 1 ? '' : 's'}`}`,
+        submenu: [{ label: 'Remove', click: () => study.remove(f.id) }]
+      }))
+    })
+  }
+  return items
 }
 
 // Module-level reference: a Tray that gets garbage-collected disappears.
@@ -19,9 +60,9 @@ let tray: Tray | null = null
 export function createTray(actions: TrayActions): void {
   const isMac = process.platform === 'darwin'
 
-  // Both images are drawn at 2x; macOS template images are tinted by the
-  // system to match light/dark menu bars.
-  const icon = nativeImage.createFromBuffer(readFileSync(isMac ? macIconPath : winIconPath), { scaleFactor: 2 })
+  // The white 2x template image is used on every platform; macOS tints it to
+  // match light/dark menu bars.
+  const icon = nativeImage.createFromBuffer(readFileSync(iconPath), { scaleFactor: 2 })
   if (isMac) icon.setTemplateImage(true)
 
   tray = new Tray(icon)
@@ -33,7 +74,13 @@ export function createTray(actions: TrayActions): void {
       Menu.buildFromTemplate([
         { label: actions.isCompanionVisible() ? 'Hide Echo' : 'Show Echo', click: actions.toggleCompanion },
         { label: 'Open Lesson', click: actions.openLesson },
+        { label: actions.isVoiceActive() ? 'End Conversation' : 'Start Conversation', click: actions.toggleVoice },
         { type: 'separator' },
+        ...screenItems(actions),
+        { type: 'separator' },
+        ...studyItems(actions),
+        { type: 'separator' },
+        { label: 'Preferences…', click: actions.openPreferences },
         { label: 'Quit Echo', click: () => app.quit() }
       ])
     )

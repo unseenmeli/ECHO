@@ -29,6 +29,9 @@ export interface BoardViewport {
   scrollX: number
   scrollY: number
   zoom: number
+  /** Size of the visible canvas in screen pixels (set by getScene; absent in saved boards). */
+  width?: number
+  height?: number
 }
 
 export interface BoardScene {
@@ -51,6 +54,54 @@ export interface BoardApi {
   /** Delete elements by id. Returns the ids that were found and deleted. */
   deleteElements(ids: string[]): Promise<string[]>
   clear(): Promise<void>
+  /** Apply a validated batch atomically. */
+  applyBatch(batch: BoardBatch): Promise<BatchResult>
+}
+
+/** Makes `arrowId` follow the shapes at its ends when the user drags them. */
+export interface BindingSpec {
+  arrowId: string
+  startId?: string
+  endId?: string
+}
+
+/**
+ * Several related changes applied as ONE atomic scene update, so a diagram
+ * appears (or a highlight moves) in a single frame and is one undo step.
+ * Untouched elements, the user's drawings and the camera are left alone.
+ */
+/** Image data for `image` elements (Excalidraw keeps it apart from the elements, keyed by fileId). */
+export interface BoardFile {
+  id: string
+  dataURL: string
+  mimeType: string
+}
+
+export interface BoardBatch {
+  /** Pictures that new image elements in `upsert` refer to. Added before the elements. */
+  files?: BoardFile[]
+  upsert: ElementSkeleton[]
+  patch: ElementPatch[]
+  remove: string[]
+  bindings: BindingSpec[]
+  /**
+   * Animate the camera to these elements. "frame" centres and sizes the view around newly drawn content;
+   * "pan" glides to what the narration is about without changing the zoom unless it doesn't fit.
+   */
+  focus?: {
+    ids: string[]
+    mode?: 'frame' | 'pan'
+    /** What the focused elements belong to (e.g. their diagram): kept in view while panning when it fits. */
+    context?: string[]
+    /** The content is larger than the free area: zoom out so all of it is visible. */
+    fit?: boolean
+  }
+}
+
+export interface BatchResult {
+  upserted: string[]
+  patched: string[]
+  removed: string[]
 }
 
 export type BoardMethod = keyof BoardApi
@@ -59,4 +110,6 @@ export type BoardMethod = keyof BoardApi
 export interface SavedBoard {
   elements: BoardElement[]
   viewport: BoardViewport
+  /** Image data of the pictures on the board (the lesson's and the learner's own pasted ones), by fileId. */
+  files?: Record<string, BoardFile & { created?: number }>
 }

@@ -1,0 +1,9 @@
+[
+  { "name": "baseline", "description": "Current defaults", "env": {} },
+  { "name": "small-pieces", "description": "The old speech chunking: 18-char first piece, 140-char groups", "env": { "ECHO_TTS_FIRST_CHARS": "18", "ECHO_TTS_GROUP_CHARS": "140" } },
+  { "name": "big-pieces", "description": "Fewer, longer pieces: 60-char first piece, 360-char groups", "env": { "ECHO_TTS_FIRST_CHARS": "60", "ECHO_TTS_GROUP_CHARS": "360" } },
+  { "name": "voice-helena", "description": "Aura-2 Helena voice", "env": { "ECHO_TTS_VOICE": "aura-2-helena-en" } },
+  { "name": "voice-apollo", "description": "Aura-2 Apollo voice", "env": { "ECHO_TTS_VOICE": "aura-2-apollo-en" } },
+  { "name": "fast-only", "description": "Smart routing off: every non-deep answer on the fast model", "env": { "ECHO_SMART_ROUTING": "false" } },
+  { "name": "snippets-only", "description": "Web fetch off: answers from search snippets only", "env": { "ECHO_WEB_FETCH": "false" } }
+]

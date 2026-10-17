@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import '@fontsource/silkscreen/400.css'
 import { TutorWindow } from './TutorWindow'
 import './tutor.css'
 
