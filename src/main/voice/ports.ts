@@ -50,11 +50,19 @@ export interface TtsHooks {
   onError(responseId: string | null, message: string, fatal: boolean): void
 }
 
+export interface ScreenImage {
+  mediaType: 'image/jpeg'
+  /** Base64-encoded image bytes. */
+  data: string
+}
+
 export interface ChatRequest {
   system: string
   /** Overrides the configured reply budget (lesson replies carry segment markup). */
   maxTokens?: number
   messages: ChatMessage[]
+  /** Screenshot for this turn only; attached to the latest user message, never stored in history. */
+  image?: ScreenImage
   signal: AbortSignal
   onText(delta: string): void
 }
@@ -88,7 +96,16 @@ export interface EnginePort {
   duck(on: boolean): void
 }
 
-/** Future hook for screen / whiteboard context. Nothing implements it yet. */
+export interface VoiceContext {
+  /** What the app knows about the screen, for the system prompt. */
+  screen?: string
+  screenImage?: ScreenImage
+  board?: string
+}
+
+/** Screen / whiteboard context, fetched once per reply. */
 export interface VoiceContextProvider {
-  getContext(): Promise<{ screen?: string; board?: string } | null>
+  /** True when getContext() will include a screenshot. Must be cheap: it's checked as the turn ends. */
+  isWatchingScreen?(): boolean
+  getContext(): Promise<VoiceContext | null>
 }

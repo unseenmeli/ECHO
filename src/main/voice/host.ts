@@ -5,6 +5,7 @@ import { ClaudeChat } from './claude'
 import { loadEnvFiles, readVoiceConfig } from './config'
 import { DeepgramTts } from './tts'
 import { FluxClient } from './flux'
+import { screenVoiceContext } from './screenProvider'
 import type { EnginePort } from './ports'
 import { VoiceSession } from './session'
 import {
@@ -30,6 +31,7 @@ class VoiceHost {
   private engine: BrowserWindow | null = null
   private configError: VoiceSnapshot | null = null
   private envLoaded = false
+  private canCaptureScreen: (wc: Electron.WebContents) => boolean = () => false
 
   // --- EnginePort ---------------------------------------------------------------------
   private readonly enginePort: EnginePort = {
@@ -43,7 +45,9 @@ class VoiceHost {
     duck: (on) => this.toEngine('voice-engine:duck', on)
   }
 
-  register(): void {
+  /** @param canCaptureScreen The window allowed to share the screen (the companion). */
+  register(options: { canCaptureScreen?(wc: Electron.WebContents): boolean } = {}): void {
+    if (options.canCaptureScreen) this.canCaptureScreen = options.canCaptureScreen
     this.setupPermissions()
     // Test/diagnostic hook, never on by default: lets the e2e harness read the live whiteboard.
     if (!app.isPackaged && process.env.ECHO_DEBUG_HOOKS === '1') (globalThis as Record<string, unknown>).__echoBoard = board
@@ -176,6 +180,7 @@ class VoiceHost {
         available: () => cfg.visualsEnabled && isBoardOpen(),
         board: () => (isBoardOpen() ? board : null),
       },
+      contextProvider: screenVoiceContext,
       emit: (e) => this.broadcast(e),
       log: (m) => console.log(m)
     })
@@ -259,15 +264,30 @@ class VoiceHost {
 
   // --- Permissions --------------------------------------------------------------------------------------
 
-  /** Microphone is granted only to the audio engine window, and only for audio. */
+  /**
+   * Microphone is granted only to the audio engine window, and only for audio.
+   * Screen capture is granted only to the window that owns screen sharing.
+   */
   private setupPermissions(): void {
     const ses = electronSession.defaultSession
     ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+      if (permission === 'display-capture') return callback(this.canCaptureScreen(wc))
       const mediaTypes = (details as { mediaTypes?: string[] }).mediaTypes ?? []
-      const audioOnly = mediaTypes.length > 0 && mediaTypes.every((t) => t === 'audio')
-      callback(permission === 'media' && this.isEngine(wc) && audioOnly)
+      const only = (type: string): boolean => mediaTypes.length > 0 && mediaTypes.every((t) => t === type)
+      // getDisplayMedia arrives here as a media request with no media types
+      // (they only describe camera / microphone devices).
+      const screenShare = this.canCaptureScreen(wc) && (mediaTypes.length === 0 || only('video'))
+      const granted = permission === 'media' && ((this.isEngine(wc) && only('audio')) || screenShare)
+      if (!granted) {
+        console.log(`[permissions] denied ${permission} (${mediaTypes.join(', ') || 'no media types'}) for ${wc.getURL()}`)
+      }
+      callback(granted)
     })
-    ses.setPermissionCheckHandler((wc, permission) => permission === 'media' && !!wc && this.isEngine(wc))
+    ses.setPermissionCheckHandler((wc, permission) => {
+      if (!wc) return false
+      if (permission === 'display-capture') return this.canCaptureScreen(wc)
+      return permission === 'media' && (this.isEngine(wc) || this.canCaptureScreen(wc))
+    })
   }
 }
 

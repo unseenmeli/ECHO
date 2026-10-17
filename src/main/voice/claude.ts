@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { VoiceConfig } from './config'
-import { ChatError, type ChatPort, type ChatRequest } from './ports'
+import type { ChatMessage } from './history'
+import { ChatError, type ChatPort, type ChatRequest, type ScreenImage, type VoiceContext } from './ports'
 
 export const TUTOR_SYSTEM_PROMPT = `You are ECHO, a friendly, clear, conversational tutor speaking out loud with the user.
 
@@ -16,14 +17,40 @@ How to answer:
 
 Honesty:
 - Do not invent facts, sources, screen content or whiteboard actions.
-- You cannot see the user's screen or the whiteboard unless context is explicitly provided below. If you aren't given any, say you can't see it and offer to talk it through.`
+- You can only see the user's screen when a screenshot is attached to their latest message, and the whiteboard only when its state is provided below. Otherwise say you can't see it and offer to talk it through.`
 
-export function buildSystemPrompt(context?: { screen?: string; board?: string } | null): string {
-  if (!context || (!context.screen && !context.board)) return TUTOR_SYSTEM_PROMPT
+/**
+ * @param alreadySaid A filler line ECHO has already spoken for this turn
+ *   (e.g. "Let me take a look!"), so the reply continues from it.
+ */
+export function buildSystemPrompt(context?: VoiceContext | null, alreadySaid?: string | null): string {
+  if (!context?.screen && !context?.board && !alreadySaid) return TUTOR_SYSTEM_PROMPT
   const parts = [TUTOR_SYSTEM_PROMPT, '', 'Context supplied by the app for this turn:']
-  if (context.screen) parts.push(`<screen_context>\n${context.screen}\n</screen_context>`)
-  if (context.board) parts.push(`<whiteboard_state>\n${context.board}\n</whiteboard_state>`)
+  if (context?.screen) parts.push(`<screen_context>\n${context.screen}\n</screen_context>`)
+  if (context?.board) parts.push(`<whiteboard_state>\n${context.board}\n</whiteboard_state>`)
+  if (alreadySaid) {
+    parts.push(
+      `<already_said>\n${alreadySaid}\n</already_said>`,
+      "You just said the line above out loud. Continue straight on from it: don't repeat it, and don't say again that you're going to look."
+    )
+  }
   return parts.join('\n')
+}
+
+/** Puts the screenshot in front of the latest user message (images work best before the text). */
+export function withImage(messages: ChatMessage[], image?: ScreenImage): Anthropic.MessageParam[] {
+  const last = messages.at(-1)
+  if (!image || last?.role !== 'user') return messages
+  return [
+    ...messages.slice(0, -1),
+    {
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } },
+        { type: 'text', text: last.content }
+      ]
+    }
+  ]
 }
 
 function classify(err: unknown): ChatError {
@@ -61,7 +88,7 @@ export class ClaudeChat implements ChatPort {
       model: this.cfg.claudeModel,
       max_tokens: req.maxTokens ?? this.cfg.claudeMaxTokens,
       system: req.system,
-      messages: req.messages,
+      messages: withImage(req.messages, req.image),
       ...(this.cfg.claudeDisableThinking ? { thinking: { type: 'disabled' as const } } : {})
     }
     try {
