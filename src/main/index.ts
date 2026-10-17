@@ -10,6 +10,7 @@ import { registerPreferenceIpc } from './memory/preferenceIpc'
 import { PreferenceStore } from './memory/preferenceStore'
 import { STUDY_EXTENSIONS, StudyMaterial } from './study/studyMaterial'
 import { openPreferencesWindow, preferencesWindow } from './preferencesWindow'
+import { registerDraftIpc } from './compose/draftWindow'
 
 const COMPANION_WIDTH = 150
 // Tall enough for the "Watching" pill above the character.
@@ -224,6 +225,11 @@ if (!app.requestSingleInstanceLock()) {
     app.dock?.hide()
 
     registerBoardIpc()
+    // The card for emails and posts ECHO drafts, shown beside the companion.
+    registerDraftIpc(() => (companion && !companion.isDestroyed() ? companion.getBounds() : null), {
+      answer: (id, send) => voiceHost.answerDraft(id, send),
+      edit: (id, edits) => voiceHost.editDraft(id, edits)
+    })
     registerScreenIpc(() => [companion, lesson].filter((w): w is BrowserWindow => !!w && !w.isDestroyed()))
     // What ECHO remembers about how to teach this learner: a small file in the user-data folder.
     const preferences = new PreferenceStore(join(app.getPath('userData'), 'preferences.json'))

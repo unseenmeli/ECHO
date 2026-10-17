@@ -1,0 +1,124 @@
+:root {
+  --card: #ffffff;
+  --ink: #1c1c1e;
+  --muted: #6b6b70;
+  --line: rgba(0, 0, 0, 0.12);
+  --accent: #c41f74;
+  --focus-ring: #0a84ff;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: calc(100% - 12px);
+  margin: 6px;
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.draft-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.draft-kind {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.draft-dest {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.draft-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+}
+
+.draft-field span {
+  width: 52px;
+  color: var(--muted);
+}
+
+.draft-field input,
+.draft-body {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+}
+
+.draft-body {
+  resize: none;
+  line-height: 1.45;
+  padding: 4px 0;
+}
+
+.draft-field input:focus-visible,
+.draft-body:focus-visible {
+  box-shadow: inset 0 -2px 0 var(--focus-ring);
+}
+
+.draft-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.draft-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.draft-btn {
+  font: inherit;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #f5f4f0;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.draft-btn.is-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.draft-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
