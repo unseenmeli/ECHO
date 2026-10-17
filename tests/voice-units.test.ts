@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { PhraseChunker, sanitizeForSpeech } from '../src/main/voice/chunker'
 import { EchoGuard } from '../src/main/voice/echoGuard'
 import { ConversationHistory } from '../src/main/voice/history'
-import { classifyIntent, isNoise } from '../src/main/voice/intent'
+import { asksAboutScreen, classifyIntent, isNoise, pickFiller, SCREEN_FILLERS } from '../src/main/voice/intent'
+import { buildSystemPrompt, TUTOR_SYSTEM_PROMPT, withImage } from '../src/main/voice/claude'
 import { readVoiceConfig } from '../src/main/voice/config'
 import { parseVoiceCommand } from '../src/shared/voice'
 
@@ -92,6 +93,51 @@ describe('intent', () => {
     expect(isNoise('')).toBe(true)
     expect(isNoise(' ... ')).toBe(true)
     expect(isNoise('hm')).toBe(false)
+  })
+  it('recognizes questions about the screen', () => {
+    for (const t of ['Hey, do you see this thing on my screen?', "What's this?", 'Can you look at my code?', 'what is that error', 'this button here']) {
+      expect(asksAboutScreen(t)).toBe(true)
+    }
+    for (const t of ['What is a variable?', 'Explain recursion more simply.', 'Give me an example.']) {
+      expect(asksAboutScreen(t)).toBe(false)
+    }
+  })
+  it('never picks the same filler twice in a row', () => {
+    let prev: string | null = null
+    for (let i = 0; i < 50; i++) {
+      const next = pickFiller(prev)
+      expect(SCREEN_FILLERS).toContain(next)
+      expect(next).not.toBe(prev)
+      prev = next
+    }
+  })
+})
+
+describe('screen context for Claude', () => {
+  const image = { mediaType: 'image/jpeg' as const, data: 'AAAA' }
+
+  it('puts the screenshot before the latest user message only', () => {
+    const messages = [
+      { role: 'user' as const, content: 'Hi' },
+      { role: 'assistant' as const, content: 'Hello!' },
+      { role: 'user' as const, content: 'What is on my screen?' }
+    ]
+    const out = withImage(messages, image)
+    expect(out.slice(0, 2)).toEqual(messages.slice(0, 2))
+    expect(out[2]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'AAAA' } },
+        { type: 'text', text: 'What is on my screen?' }
+      ]
+    })
+    expect(withImage(messages)).toBe(messages)
+  })
+  it('tells Claude what it already said', () => {
+    expect(buildSystemPrompt(null)).toBe(TUTOR_SYSTEM_PROMPT)
+    const prompt = buildSystemPrompt({ screen: 'A screenshot is attached.' }, 'Looking into it!')
+    expect(prompt).toContain('<screen_context>\nA screenshot is attached.\n</screen_context>')
+    expect(prompt).toContain('<already_said>\nLooking into it!\n</already_said>')
   })
 })
 

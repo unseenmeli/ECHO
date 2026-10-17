@@ -3,7 +3,7 @@ import { PhraseChunker, type Phrase } from './chunker'
 import { buildSystemPrompt } from './claude'
 import { EchoGuard } from './echoGuard'
 import { ConversationHistory } from './history'
-import { classifyIntent, isNoise } from './intent'
+import { asksAboutScreen, classifyIntent, isNoise, pickFiller } from './intent'
 import {
   ChatError,
   type ChatPort,
@@ -57,6 +57,8 @@ interface Reply {
   abort: AbortController
   chunker: PhraseChunker
   fullText: string
+  /** Spoken right away while the screen is checked. Part of fullText, but kept out of history. */
+  filler: string | null
   sinceFlush: string
   segments: Segment[]
   flushedAcks: number
@@ -107,6 +109,7 @@ export class VoiceSession {
   private lastEndedTurn = -1
   private replySeq = 0
   private entrySeq = 0
+  private lastFiller: string | null = null
 
   private duckTimer: ReturnType<typeof setTimeout> | null = null
   private releaseTimer: ReturnType<typeof setTimeout> | null = null
@@ -430,16 +433,17 @@ export class VoiceSession {
     // An unanswered earlier question + this one are one question split by a pause.
     if (this.history.hasUnansweredUser()) this.history.mergeIntoLastUser(text)
     else this.history.addUser(text)
-    this.startReply()
+    this.startReply(text)
   }
 
-  private startReply(): void {
+  private startReply(question: string): void {
     const epoch = this.epoch
     const reply: Reply = {
       id: `r${++this.replySeq}`,
       abort: new AbortController(),
       chunker: new PhraseChunker(),
       fullText: '',
+      filler: null,
       sinceFlush: '',
       segments: [],
       flushedAcks: 0,
@@ -452,6 +456,12 @@ export class VoiceSession {
     this.reply = reply
     this.tts?.begin(reply.id)
     this.upsertEntry({ id: reply.id, role: 'assistant', text: '', final: false, spokenChars: 0 })
+    // Looking at the screen takes a moment: say so instead of going quiet.
+    if (this.deps.contextProvider?.isWatchingScreen?.() && asksAboutScreen(question)) {
+      reply.filler = this.lastFiller = pickFiller(this.lastFiller)
+      this.speakPhrase(reply, { text: reply.filler, flush: false })
+      this.flushSegment(reply, true)
+    }
     this.refresh()
     void this.runChat(reply, epoch)
   }
@@ -462,8 +472,9 @@ export class VoiceSession {
       const context = (await this.deps.contextProvider?.getContext().catch(() => null)) ?? null
       if (!alive()) return
       await this.deps.chat.stream({
-        system: buildSystemPrompt(context),
+        system: buildSystemPrompt(context, reply.filler),
         messages: this.history.toMessages(this.deps.config.historyMessages),
+        image: context?.screenImage,
         signal: reply.abort.signal,
         onText: (delta) => alive() && this.onClaudeText(reply, delta)
       })
@@ -581,6 +592,11 @@ export class VoiceSession {
     return r.fullText.slice(0, end)
   }
 
+  /** What belongs in history: the delivered text minus the filler line. */
+  private withoutFiller(r: Reply, delivered: string): string {
+    return r.filler && delivered.startsWith(r.filler) ? delivered.slice(r.filler.length).trim() : delivered
+  }
+
   private finishReply(r: Reply, interrupted: boolean): void {
     if (this.reply !== r) return
     this.reply = null
@@ -594,7 +610,7 @@ export class VoiceSession {
       delivered = this.deliveredText(r, true)
     } else {
       delivered = r.fullText
-      this.history.commitAssistant(delivered)
+      this.history.commitAssistant(this.withoutFiller(r, delivered))
     }
     const entry = this.entries.find((e) => e.id === r.id)
     if (entry) {
@@ -630,9 +646,11 @@ export class VoiceSession {
         if (heard > 0) delivered = (delivered + ' ' + words.slice(0, heard).join(' ')).trim()
       }
     }
-    this.history.commitAssistant(delivered)
-    // ECHO did start talking: the user's question was heard, so the next turn is a new one.
-    if (!delivered && r.audioStarted) this.history.markAnswered()
+    const heard = this.withoutFiller(r, delivered)
+    this.history.commitAssistant(heard)
+    // ECHO did start answering: the user's question was heard, so the next turn is a new one.
+    // A filler line alone doesn't count; the question is still open.
+    if (!heard && r.audioStarted && !r.filler) this.history.markAnswered()
     const entry = this.entries.find((e) => e.id === r.id)
     if (entry) this.upsertEntry({ ...entry, spokenChars: delivered.length })
   }
