@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { describe, expect, it } from 'vitest'
 import { ClaudeChat } from '../src/main/voice/claude'
 import { readVoiceConfig } from '../src/main/voice/config'
-import { chooseModelTier, THINKING_FILLERS } from '../src/main/voice/routing'
+import { chooseModelTier, parseQualityRoutes } from '../src/main/voice/routing'
 
 const tier = (question: string, screenShared = false) => chooseModelTier({ question, screenShared }).tier
 
@@ -36,6 +36,23 @@ describe('model routing', () => {
     expect(tier('Can you look at this function on my screen?', true)).toBe('strong')
   })
 
+  it('sends visual analysis, whiteboard lessons, practice and follow-ups to the quality model, as configured', () => {
+    const route = (question: string, extra: Partial<Parameters<typeof chooseModelTier>[0]> = {}) => chooseModelTier({ question, screenShared: false, ...extra })
+    expect(route('What does this diagram show?', { screenShared: true }).reasons).toEqual(['screen'])
+    expect(route('What is a variable?', { lesson: true }).tier).toBe('strong')
+    expect(route('I think it is forty two', { practice: true }).tier).toBe('strong')
+    expect(route('How does a hash map work?').tier).toBe('strong')
+    // A short follow-up continues a hard answer on the same model; small talk does not.
+    expect(route('What about that?', { previousTier: 'strong' }).reasons[0]).toBe('follow-up')
+    expect(route('Thanks!', { previousTier: 'strong' }).tier).toBe('fast')
+    expect(route('What about that?').tier).toBe('fast')
+    // Each route can be switched off.
+    const routes = parseQualityRoutes('reasoning')
+    expect(route('What does this diagram show?', { screenShared: true, routes }).tier).toBe('fast')
+    expect(route('Why is my loop off by one?', { routes }).tier).toBe('strong')
+    expect(route('Why is my loop off by one?', { routes: parseQualityRoutes('none') }).tier).toBe('fast')
+  })
+
   it('says why, for the log', () => {
     expect(chooseModelTier({ question: 'Compare quicksort and mergesort, and also why is one stable?', screenShared: false }).reasons).toEqual(
       expect.arrayContaining(['comparison', 'multi-part'])
@@ -62,9 +79,5 @@ describe('model routing', () => {
     await chat.stream({ system: 's', messages: [{ role: 'user', content: 'Hi' }], reasoning: 'off', signal: new AbortController().signal, onText: () => {} })
     expect(bodies.map((b) => b.model)).toEqual(['claude-opus-5-5', 'claude-haiku-5-5'])
     expect(bodies[0].output_config).toEqual({ effort: 'medium' })
-  })
-
-  it('has short thinking fillers', () => {
-    expect(THINKING_FILLERS.every((f) => f.length < 40)).toBe(true)
   })
 })

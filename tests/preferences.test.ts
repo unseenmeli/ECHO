@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { PreferenceStore, type PreferenceFileIo, type StoreChange } from '../src/main/memory/preferenceStore'
 import { asksToForget, asksToRemember, PREFERENCE_TOOLS, PREFERENCE_TOOL_GUIDE, PreferenceTools } from '../src/main/memory/preferenceTools'
@@ -489,6 +492,42 @@ describe('preferences in a conversation', () => {
     t.chat.scripts.push((r) => r.onText('A closure captures variables.'))
     await t.say('What is a closure?')
     expect(t.chat.calls).toHaveLength(2)
+  })
+
+  it('a save the learner did not word as lasting is asked about, and kept on yes', async () => {
+    const store = new PreferenceStore(FILE, memoryIo())
+    const t = sessionSetup(store)
+    let note: string | void = undefined
+    t.chat.scripts.push((r) => {
+      note = r.onToolUse?.({ name: 'remember_preference', input: { key: 'visualStyle', value: 'diagrams' } })
+      r.onText('Should I remember that you like diagrams?')
+    })
+    await t.say('I like diagrams')
+    expect(store.promptBlock()).toBe('')
+    expect(note).toMatch(/not saved/)
+    await t.say('yes')
+    expect(store.get('visualStyle')).toBe('diagrams')
+  })
+
+  it('a preference saved by voice is in the requests of the next app run', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'echo-prefs-'))
+    const file = join(dir, 'preferences.json')
+    const first = sessionSetup(new PreferenceStore(file))
+    first.chat.scripts.push((r) => {
+      r.onToolUse?.({ name: 'remember_preference', input: { key: 'userName', value: 'Sam' } })
+      r.onText("Got it, Sam.")
+    })
+    await first.say('Call me Sam')
+    first.session.stop()
+
+    // A fresh store reading the same file is what the next launch does.
+    const relaunched = new PreferenceStore(file)
+    expect(relaunched.view().rows.find((r) => r.key === 'userName')!.entry?.value).toBe('Sam')
+    const second = sessionSetup(relaunched)
+    second.chat.scripts.push((r) => r.onText('Hi.'))
+    await second.say('Hello')
+    expect(second.chat.calls[0].systemTail).toContain('- Your name: Sam')
+    rmSync(dir, { recursive: true, force: true })
   })
 
   it('applies a new voice from the next reply, not mid-sentence', async () => {

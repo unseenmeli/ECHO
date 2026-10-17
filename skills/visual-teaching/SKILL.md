@@ -30,6 +30,8 @@ Keeping speech and drawing in step
 Preferences
 - A saved visual style shapes the drawings. For example, "minimal sketches" means fewer nodes and no notes unless they are needed, and "diagrams" means you prefer a diagram over a table. What the learner asks for now wins.
 
+The examples below show how drawing and narration fit together. Don't reuse their topics or wording.
+
 Example: a process, with each sentence highlighting its step.
 <segment><objective>How a request reaches a website</objective><draw>{"setup":[{"op":"diagram","id":"web_request","title":"Loading a page","layout":"row","nodes":[{"id":"browser","label":"Browser","color":"purple"},{"id":"dns","label":"DNS lookup","color":"blue"},{"id":"server","label":"Web server","color":"pink"}],"edges":[{"from":"browser","to":"dns","label":"asks for IP"},{"from":"dns","to":"server","label":"IP address"}]}],"cues":[{"sentence":0,"ops":[{"op":"highlight","targets":["browser"]}]},{"sentence":1,"ops":[{"op":"highlight","targets":["dns"]}]},{"sentence":2,"ops":[{"op":"highlight","targets":["server"]}]}]}</draw><say>Your browser starts with only a name, like example dot com. It asks DNS to turn that name into an IP address. Then it connects straight to the web server at that address.</say></segment>
 

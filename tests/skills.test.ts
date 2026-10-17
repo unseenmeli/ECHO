@@ -221,12 +221,12 @@ describe('the assembled API request', () => {
     expect(at('You are ECHO')).toBe(0)
     expect(at('<skill name="visual-teaching">')).toBeGreaterThan(at('LESSON MODE'))
     expect(at('<skill name="deep-explanation">')).toBeGreaterThan(at('<skill name="visual-teaching">'))
-    // A deep explanation may think first, at medium effort.
+    // A deep explanation may think first, at the configured deep effort (quality first: high by default).
     expect(tutor.thinking).toEqual({ type: 'adaptive' })
-    expect(tutor.output_config).toEqual({ effort: 'medium' })
+    expect(tutor.output_config).toEqual({ effort: 'high' })
     // Deep explanations go to the deep model with the bigger budget, and the preference tools still ride along.
     expect(tutor.model).toBe(cfg.config.deepModel)
-    expect(tutor.max_tokens).toBe(7000)
+    expect(tutor.max_tokens).toBe(21000)
     expect((tutor.tools as Array<{ name: string }>).map((t) => t.name)).toContain('remember_preference')
   })
 })

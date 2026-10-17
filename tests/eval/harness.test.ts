@@ -23,7 +23,7 @@ describe('eval harness', () => {
   it('runs questions per variant and writes audio, results and a listening report', { timeout: 30_000 }, async () => {
     const outDir = mkdtempSync(join(tmpdir(), 'echo-eval-'))
     const questions: EvalQuestion[] = [
-      { id: 'hash-map', category: 'concept', turns: [{ say: 'How does a hash map work?' }], expect: { tier: 'fast', mentions: ['hash'], maxWords: 80 } },
+      { id: 'hash-map', category: 'concept', turns: [{ say: 'What is a hash map?' }], expect: { tier: 'fast', mentions: ['hash'], maxWords: 80 } },
       { id: 'two-turns', category: 'follow-up', turns: [{ say: 'What is a hash map?' }, { say: 'Why is my hash map lookup slow?' }], expect: { tier: 'strong', mentions: ['collision'] } }
     ]
     const run = await runEval({

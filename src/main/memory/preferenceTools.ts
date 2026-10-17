@@ -35,7 +35,7 @@ export const PREFERENCE_TOOLS: ChatTool[] = [
 export const PREFERENCE_TOOL_GUIDE = `REMEMBERING PREFERENCES
 
 You can save lasting preferences about how to teach this learner. Saving is deliberate and rare.
-- Call remember_preference only when the learner explicitly asks you to remember something or sets a standing rule: "remember that I prefer diagrams", "from now on, be less formal", "always keep it short", "call me Sam". Confirm aloud in one short sentence in the same reply.
+- Call remember_preference only when the learner explicitly asks you to remember something or sets a standing rule: "remember that I prefer diagrams", "from now on, be less formal", "always keep it short", "call me Sam". Call it before you say anything about saving: the tool result says whether it was saved. Then confirm aloud in one short sentence, or, if it was not saved, ask whether to remember it.
 - A request about the current answer is temporary. "Explain this briefly", "just this once", "for now", "quickly" are followed for this answer and never saved.
 - If you notice a pattern the learner never asked you to keep (for example, they keep asking for shorter answers), you may ask once, briefly, whether you should remember it, and call propose_preference. Never use remember_preference for something you inferred, and don't ask again about a pattern they declined.
 - Call forget_preference only when the learner asks you to forget, remove or reset something.
@@ -121,8 +121,17 @@ export class PreferenceTools {
       case 'remember_preference': {
         if (!isPreferenceKey(input.key)) return { tool: call.name, note: 'unknown key', changed: false }
         if (!asksToRemember(utterance)) {
-          // The model saved something the learner did not ask to keep. Do not write it.
-          return { tool: call.name, note: 'ignored: the learner did not ask to remember this', changed: false }
+          // The model saved something the learner did not ask to keep. Do not write it, but let a yes keep it,
+          // unless they said it was only for now.
+          if (TEMPORARY_CUE.test(utterance)) {
+            return { tool: call.name, note: 'not saved: the learner asked for this only for now. Do not say it was saved', changed: false }
+          }
+          this.proposal = { key: input.key, value: typeof input.value === 'string' ? input.value : '' }
+          return {
+            tool: call.name,
+            note: 'not saved: the learner did not ask for this to last. Ask in one short question whether to remember it; it is saved only if they say yes',
+            changed: false
+          }
         }
         const r = this.store.set(input.key, input.value, 'explicit')
         this.proposal = null

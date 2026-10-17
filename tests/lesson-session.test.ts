@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readVoiceConfig } from '../src/main/voice/config'
 import { ChatError, type ChatPort, type ChatRequest, type EnginePort, type SttHooks, type SttPort, type TtsHooks, type TtsPort, type TurnInfo, type VoiceContextProvider } from '../src/main/voice/ports'
-import { DEEP_FILLERS, ROUTER_SYSTEM, SCREEN_FILLERS } from '../src/main/voice/intent'
+import { ROUTER_SYSTEM, WAIT_LINES } from '../src/main/voice/intent'
 import { DEEP_DIVE_REQUEST, VoiceSession, type LessonSupport } from '../src/main/voice/session'
 
-const DEEP_MAX = 7000
+const DEEP_MAX = 21000
 import type { VoiceEvent } from '../src/shared/voice'
 import type { VisualPlan } from '../src/main/lesson/ops'
 import { FakeBoard, diagramPlan, sleep, until } from './helpers/lesson-fakes'
@@ -106,7 +106,7 @@ const seg = (objective: string, say: string, plan?: VisualPlan | string): string
 const SEG1 = seg('Show the parts', 'The CPU does the work. It reads from memory. Memory loads from disk.', diagramPlan('d1', [{ sentence: 1, ops: [{ op: 'highlight', targets: ['d1_b'] }] }]))
 const SEG2 = seg('Wrap up', 'That loop repeats billions of times a second.', { setup: [], cues: [{ sentence: 0, ops: [{ op: 'highlight', targets: ['d1_c'] }] }] })
 
-function setup(contextProvider?: VoiceContextProvider, env: NodeJS.ProcessEnv = {}) {
+function setup(contextProvider?: VoiceContextProvider, env: NodeJS.ProcessEnv = {}, extra: Partial<LessonSupport> = {}) {
   const cfg = readVoiceConfig({ ANTHROPIC_API_KEY: 'a', DEEPGRAM_API_KEY: 'd', ...env })
   if (!cfg.ok) throw new Error('config')
   const log: string[] = []
@@ -132,7 +132,8 @@ function setup(contextProvider?: VoiceContextProvider, env: NodeJS.ProcessEnv = 
       await sleep(5) // the window takes a moment to load
       windowOpen = true
       return true
-    }
+    },
+    ...extra
   }
   const session = new VoiceSession({
     config: cfg.config,
@@ -169,9 +170,7 @@ describe('lesson mode through the voice session', () => {
     t.chat.scripts.push(stream(SEG1 + SEG2))
     t.ask('Explain CI/CD deeply', 0)
 
-    // The filler starts as soon as the model has judged the request, before the window has even opened.
-    await until(() => t.ttss[0].spoken.length > 0)
-    expect(DEEP_FILLERS).toContain(t.ttss[0].spoken[0])
+    await until(() => t.chat.routes.length > 0)
     expect(t.chat.routes).toHaveLength(1)
     expect(t.chat.routes[0].messages[0].content).toContain('Explain CI/CD deeply')
     await until(() => t.chat.calls.length === 1)
@@ -179,11 +178,38 @@ describe('lesson mode through the voice session', () => {
     const call = t.chat.calls[0]
     expect(call.system).toContain('LESSON MODE')
     expect(call.system).toContain('<skill name="deep-explanation">')
-    expect(call.turnContext).toContain('<already_said>')
     expect(call.maxTokens).toBe(DEEP_MAX)
-    // The tutor's narration follows the filler.
-    await until(() => t.ttss[0].spoken.length >= 4)
-    expect(t.ttss[0].spoken.slice(1, 4)).toEqual(['The CPU does the work.', 'It reads from memory.', 'Memory loads from disk.'])
+    // The window opened quickly, so there was no wait to fill: the lesson starts with its first point.
+    expect(call.turnContext).not.toContain('<already_said>')
+    await until(() => t.ttss[0].spoken.length >= 3)
+    expect(t.ttss[0].spoken.slice(0, 3)).toEqual(['The CPU does the work.', 'It reads from memory.', 'Memory loads from disk.'])
+  })
+
+  it('"show me a picture of a neuron" opens the whiteboard and puts a real picture on it, even if the tutor only wrote the name', async () => {
+    const searches: string[] = []
+    const neuron = { fileId: 'f1', dataURL: 'data:image/png;base64,AAAA', mimeType: 'image/png' as const, width: 800, height: 600, title: 'Neuron', credit: 'Wikimedia Commons', pageUrl: 'https://commons.wikimedia.org/x' }
+    const t = setup(undefined, {}, { pictures: { find: async (req) => (searches.push(req.search ?? ''), neuron) } })
+    t.closeWindow()
+    const labelOnly: VisualPlan = { setup: [{ op: 'diagram', id: 'n1', layout: 'row', nodes: [{ id: 'n1_a', label: 'Neuron' }] }], cues: [] }
+    t.chat.scripts.push(stream(seg('Show a neuron', "Here's a neuron. Signals travel along its axon.", labelOnly)))
+    t.ask('Show me a picture of a neuron please', 0)
+
+    await until(() => t.board.elements.some((e) => e.type === 'image'))
+    expect(t.chat.routes).toHaveLength(0) // routed without asking the model what was meant
+    expect(t.opened).toHaveLength(1)
+    expect(searches[0]).toBe('neuron')
+    expect(t.chat.calls[0].turnContext).toContain('<picture_request>')
+    expect(t.board.batches.some((b) => b.files?.some((f) => f.id === 'f1'))).toBe(true)
+  })
+
+  it('says so instead of pretending when no picture can be found', async () => {
+    const t = setup(undefined, {}, { pictures: { find: async () => null } })
+    t.chat.scripts.push(stream(seg('Say so', "I couldn't find a picture of that.")))
+    t.ask('Can I see a photo of a pangolin?', 0)
+    await until(() => t.chat.calls.length === 1)
+    expect(t.chat.calls[0].turnContext).toMatch(/no picture of it could be found/)
+    await sleep(30)
+    expect(t.board.elements.some((e) => e.type === 'image')).toBe(false)
   })
 
   it('a deep dive may search the web more, and researches after its spoken hook', async () => {
@@ -240,7 +266,7 @@ describe('lesson mode through the voice session', () => {
     expect(t.opened).toHaveLength(0)
     expect(t.chat.calls[0].system).not.toContain('<skill name="deep-explanation">')
     expect(t.chat.calls[0].system).not.toContain('LESSON MODE')
-    expect(DEEP_FILLERS).not.toContain(t.ttss[0].spoken[0])
+    expect(WAIT_LINES.whiteboard).not.toContain(t.ttss[0].spoken[0])
   })
 
   it('closes the lesson window when told to, and does not start a deep dive', async () => {
@@ -252,7 +278,7 @@ describe('lesson mode through the voice session', () => {
     expect(t.opened).toHaveLength(0)
     expect(t.chat.calls).toHaveLength(0) // no tutor request: the learner asked for an action, not an answer
     expect(t.ttss[0].spoken.join(' ')).toMatch(/closed the whiteboard/i)
-    expect(DEEP_FILLERS).not.toContain(t.ttss[0].spoken[0])
+    expect(WAIT_LINES.whiteboard).not.toContain(t.ttss[0].spoken[0])
     // The exchange is in the conversation, so a follow-up still has context.
     const ent = t.session.getEntries()
     expect(ent.some((e) => e.role === 'user' && e.text === 'close the deep dive')).toBe(true)
@@ -322,10 +348,10 @@ describe('lesson mode through the voice session', () => {
     t.ask('Can you explain this thing on my screen?', 0)
     await until(() => t.chat.calls.length === 1)
 
-    expect(SCREEN_FILLERS).toContain(t.ttss[0].spoken[0])
     expect(t.chat.calls[0].image).toEqual(shot)
     expect(t.chat.calls[0].turnContext).toContain('<screen_context>')
-    expect(t.chat.calls[0].turnContext).toContain('<already_said>')
+    await until(() => t.ttss[0].spoken.length > 0)
+    expect(t.ttss[0].spoken[0]).toBe('That loop repeats billions of times a second.')
   })
 
   it('speaks the tutor narration while its own drawing is applied, in step with playback', async () => {

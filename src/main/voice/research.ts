@@ -19,11 +19,11 @@ You also have a web_fetch tool that reads a whole page. It can only open URLs th
 
 /** Added to every request that offers web search. */
 export const WEB_SEARCH_GUIDE = `${SHARED}
-- For a quick question, search at most once or twice, and only if needed. Say one short sentence first ("Let me check that.") so the learner isn't left in silence, then search, then answer.`
+- For a quick question, search at most once or twice, and only if needed. A search takes a few seconds, so say a few words first, in your own words, then search, then answer.`
 
 /** Added when the reply is a spoken deep dive without a whiteboard. */
 export const WEB_SEARCH_DEEP_VERBAL = `${SHARED}
-- This is a deep explanation, so research before you explain. Say one short sentence first ("Let me look into that properly."), run the searches you need, then explain with what you found.`
+- This is a deep explanation, so research before you explain. Open with the first real point of the explanation, run the searches you need, then continue with what you found.`
 
 /** Added when the reply is a deep dive taught as whiteboard segments. */
 export const WEB_SEARCH_DEEP_LESSON = `${SHARED}
@@ -33,8 +33,8 @@ export const WEB_SEARCH_DEEP_LESSON = `${SHARED}
 /** Added when hosted code execution is offered (it runs on Anthropic's servers, never on the learner's machine). */
 export const CODE_EXECUTION_GUIDE = `CODE EXECUTION
 
-If you have a code_execution tool, run any multi-step calculation through it before you say the number: compound interest, growth over periods, powers and roots, statistics, unit conversions with several steps, anything you would otherwise estimate. Use it also to check that a short programming example really produces what you say it does. Skip it only for one-step arithmetic you can do exactly in your head. Say one short line first ("Let me work that out."), then give the result and what it shows, never the code line by line; on the whiteboard, keep code out of <say>. If running it fails, say the result is an unverified estimate.`
+If you have a code_execution tool, run any multi-step calculation through it before you say the number: compound interest, growth over periods, powers and roots, statistics, unit conversions with several steps, anything you would otherwise estimate. Use it also to check that a short programming example really produces what you say it does. Skip it only for one-step arithmetic you can do exactly in your head. Running it takes a moment, so a few words first are fine (your own, not a stock phrase); then give the result and what it shows, never the code line by line; on the whiteboard, keep code out of <say>. If running it fails, say the result is an unverified estimate.`
 
 /** Added when a quick whiteboard lesson answer offers web search. */
 export const WEB_SEARCH_LESSON = `${SHARED}
-- For a quick whiteboard answer, search at most once or twice, only if needed. Put your short lead-in ("Let me check that.") in its own first <segment> before searching.`
+- For a quick whiteboard answer, search at most once or twice, only if needed. If you search, put a few words of lead-in, in your own words, in their own first <segment> before searching.`

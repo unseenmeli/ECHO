@@ -8,3 +8,5 @@ dist
 
 # Quality eval output (audio, results, reports)
 tests/eval/out/
+# Live benchmark reports
+tests/live/out/

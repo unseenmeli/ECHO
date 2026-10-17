@@ -59,12 +59,16 @@ export interface ScreenImage {
   data: string
 }
 
-/** A function the model may call while it answers. Calls are fire-and-forget: the model never sees a result. */
+/** A function the model may call while it answers. The outcome goes back to the model, which then finishes its reply. */
 export interface ChatTool {
   name: string
   description: string
   input_schema: { type: 'object'; properties: Record<string, unknown>; required: string[] }
 }
+
+/** How hard the model works on a reply (more thinking and care at higher levels, and a slower first word). */
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 export interface ToolCall {
   name: string
@@ -96,7 +100,7 @@ export interface ChatRequest {
   cache?: boolean
   /** 'adaptive' lets the model think before answering (deep explanations); 'off' keeps the first word fast. */
   reasoning?: 'off' | 'adaptive'
-  effort?: 'low' | 'medium' | 'high'
+  effort?: Effort
   /** Offer Anthropic's hosted code execution sandbox (runs on Anthropic's servers, never on this machine). */
   codeExecution?: boolean
   onResult?(result: ChatResult): void
@@ -108,8 +112,8 @@ export interface ChatRequest {
   webFetch?: { maxUses: number; maxContentTokens: number }
   onFetchStart?(): void
   tools?: ChatTool[]
-  /** Called once per tool the model called, after its reply has finished streaming. */
-  onToolUse?(call: ToolCall): void
+  /** Called once per tool the model called. The returned note is the tool result the model continues from. */
+  onToolUse?(call: ToolCall): string | void
   /** Overrides the configured reply budget (lesson replies carry segment markup). */
   maxTokens?: number
   /** Use the deep-dive model for this request. */

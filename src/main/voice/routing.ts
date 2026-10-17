@@ -1,15 +1,28 @@
 import { asksAboutScreen } from './intent'
 
-// Which model answers a turn that isn't a deep dive. The fast model gives the quickest first word; the strong model
-// is worth its extra second or so when the question needs real reasoning, however short it is ("why is my loop off
-// by one?"). Decided locally from the words, so ordinary turns pay no extra model call for it.
+// Which model answers a turn that isn't a deep dive. Quality first: the strong model answers anything that needs real
+// reasoning, reads the shared screen, teaches on the whiteboard or checks the learner's answers, however short the
+// question ("why is my loop off by one?"). Simple conversation stays on the fast model, whose first word arrives
+// soonest. Decided locally, so ordinary turns pay no extra model call for it.
 
 export type ModelTier = 'fast' | 'strong'
+
+/** The kinds of turn that can be sent to the strong model. Each can be switched off (ECHO_QUALITY_ROUTES). */
+export const QUALITY_ROUTES = ['reasoning', 'screen', 'lesson', 'practice', 'follow-up'] as const
+export type QualityRoute = (typeof QUALITY_ROUTES)[number]
 
 export interface RouteInput {
   question: string
   /** A screenshot goes with this turn. */
   screenShared: boolean
+  /** The answer is taught on the open whiteboard (narration and drawing written together). */
+  lesson?: boolean
+  /** A practice activity is running, so this turn is probably an answer to check. */
+  practice?: boolean
+  /** The tier that answered the previous turn. */
+  previousTier?: ModelTier
+  /** Which routes are on. Absent: all of them. */
+  routes?: ReadonlySet<QualityRoute>
 }
 
 export interface ModelRoute {
@@ -26,16 +39,27 @@ const SIGNALS: Array<{ name: string; weight: number; re: RegExp }> = [
   { name: 'math', weight: 2, re: /\b(?:solve|equation|integral|derivative|probability|calculate|compute|complexity|big[- ]o)\b|[=^√∑∫]|\d\s*[+*/×^]\s*\d|\d+(?:\.\d+)?\s*(?:percent|%)|\bhow (?:much|many|long)\b.{0,80}\d/i },
   { name: 'design', weight: 2, re: /\b(?:design|architect(?:ure)?|optimi[sz]e|scal(?:e|ing|ability)|best way to|strategy for|how would you (?:build|structure|approach))\b/i },
   { name: 'repair', weight: 2, re: /\b(?:still (?:don'?t|do not) (?:get|understand)|doesn'?t make sense|(?:i'?m|i am) (?:still )?(?:confused|lost)|that'?s (?:wrong|not right|incorrect)|you said .{1,60} but|no,? (?:i meant|that'?s not what))\b/i },
+  // Asking for an explanation of how something works is teaching, not chat.
+  { name: 'explain', weight: 2, re: /\b(?:explain|walk me through|help me understand|break (?:it|this|that) down)\b/i },
+  { name: 'mechanism', weight: 2, re: /\bhow (?:does|do|is|are|can) .{2,60}\b(?:work|happen|possible)\b|\bwhat happens (?:when|if|under)\b/i },
   { name: 'performance', weight: 1, re: /\b(?:slow(?:er)?|faster|performance|memory leak|bottleneck|efficient|efficiency)\b/i },
-  { name: 'mechanism', weight: 1, re: /\bhow (?:does|do|is|are|can) .{2,60}\b(?:work|happen|possible)\b|\bwhat happens (?:when|if|under)\b/i },
   { name: 'why', weight: 1, re: /^(?:so |but |and |ok(?:ay)? )?why\b/i }
 ]
 
-const CODE_OR_MATH_ON_SCREEN = /\b(?:code|function|error|bug|line|output|equation|formula|graph|chart|proof|problem|exercise|question|query|regex)\b/i
+/** Small talk that never needs the strong model, even right after a hard answer. */
+const PLEASANTRY = /^(?:thanks?|thank you|ok(?:ay)?|cool|great|nice|got it|perfect|awesome|bye|goodbye|see you|stop|wait|yes|no|yep|nope)\b[\s,.!?]*(?:echo|so much|a lot)?[\s,.!?]*$/i
 
 export function chooseModelTier(input: RouteInput): ModelRoute {
   const q = input.question.trim()
+  const on = (r: QualityRoute): boolean => !input.routes || input.routes.has(r)
   const words = q.split(/\s+/).filter(Boolean).length
+
+  // Whole kinds of turn that need the stronger model whatever their wording.
+  if (input.lesson && on('lesson')) return { tier: 'strong', reasons: ['lesson'] }
+  if (input.practice && on('practice')) return { tier: 'strong', reasons: ['practice'] }
+  // Reading code, an error, a diagram or an equation off a screenshot is where the stronger model's vision pays off.
+  if (input.screenShared && asksAboutScreen(q) && on('screen')) return { tier: 'strong', reasons: ['screen'] }
+
   const reasons: string[] = []
   let score = 0
   for (const s of SIGNALS) {
@@ -52,15 +76,20 @@ export function chooseModelTier(input: RouteInput): ModelRoute {
     score += 1
     reasons.push('long')
   }
-  // Reading code, an error or an equation off a screenshot is where the stronger model's vision pays off.
-  if (input.screenShared && asksAboutScreen(q) && CODE_OR_MATH_ON_SCREEN.test(q)) {
-    score += 2
-    reasons.push('screen-reasoning')
+  // "What about that?" right after a hard answer continues it: switching to the fast model mid-thread loses depth.
+  if (input.previousTier === 'strong' && words <= 12 && !PLEASANTRY.test(q) && on('follow-up')) {
+    return { tier: 'strong', reasons: ['follow-up', ...reasons] }
   }
   // "Why?" or "Thanks, that's wrong" alone is too little to go on; a repair still counts.
   if (words < 4 && !reasons.includes('repair')) return { tier: 'fast', reasons: ['short'] }
-  return score >= 2 ? { tier: 'strong', reasons } : { tier: 'fast', reasons: reasons.length ? reasons : ['simple'] }
+  if (score >= 2 && on('reasoning')) return { tier: 'strong', reasons }
+  return { tier: 'fast', reasons: reasons.length ? reasons : ['simple'] }
 }
 
-/** Said while the stronger model starts, which takes a moment longer than the fast one. */
-export const THINKING_FILLERS = ['Hmm, let me think about that.', 'Good question. Let me think.', 'Okay, let me work through that.', 'Ooh, let me think this one through.']
+/** Reads ECHO_QUALITY_ROUTES ("all", "none", or a comma list of QUALITY_ROUTES). Unknown names are ignored. */
+export function parseQualityRoutes(raw: string | undefined): Set<QualityRoute> {
+  const v = raw?.trim().toLowerCase()
+  if (!v || v === 'all') return new Set(QUALITY_ROUTES)
+  if (v === 'none' || v === 'off') return new Set()
+  return new Set(v.split(',').map((s) => s.trim()).filter((s): s is QualityRoute => (QUALITY_ROUTES as readonly string[]).includes(s)))
+}

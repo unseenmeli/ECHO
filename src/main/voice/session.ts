@@ -1,7 +1,8 @@
 import type { VoiceConfig } from './config'
 import { LessonState, LessonTurn, type LessonBoardPort, type TurnIO } from '../lesson/controller'
 import { describeBoardForTutor, summarizeBoard, summarizeSelection } from '../lesson/summary'
-import { LESSON_PROMPT_ADDENDUM, SegmentStreamParser } from '../lesson/tutorProtocol'
+import { LESSON_PROMPT_ADDENDUM, SegmentStreamParser, type ParsedSegment } from '../lesson/tutorProtocol'
+import type { VisualPlan } from '../lesson/ops'
 import { selectSkills, skillsPrompt } from '../skills'
 import { DEFAULT_CHUNKER, normalizeForSpeech, PhraseChunker, type Phrase } from './chunker'
 import { buildSystemPrompt, buildTurnContext, preferencesBlock } from './claude'
@@ -13,13 +14,13 @@ import {
   closeFallback,
   couldBeLessonRequest,
   couldBePracticeRequest,
-  DEEP_FILLERS,
   isNoise,
   parseRoute,
   pickFiller,
+  pictureRequest,
   ROUTER_SYSTEM,
   routerPrompt,
-  SCREEN_FILLERS,
+  WAIT_LINES,
   type LessonAction
 } from './intent'
 import {
@@ -37,12 +38,12 @@ import {
   type TurnInfo,
   type VoiceContextProvider
 } from './ports'
-import { chooseModelTier, THINKING_FILLERS, type ModelTier } from './routing'
+import { chooseModelTier, type ModelTier } from './routing'
 import { danglingReferenceNote, misheardNote, unsureWords } from './repair'
 import { CODE_EXECUTION_GUIDE, WEB_FETCH_GUIDE, WEB_SEARCH_DEEP_LESSON, WEB_SEARCH_DEEP_VERBAL, WEB_SEARCH_GUIDE, WEB_SEARCH_LESSON } from './research'
 import type { PreferenceStorePort } from '../memory/preferenceStore'
 import { STUDY_MATERIAL_GUIDE, type StudyMaterialPort } from '../study/studyMaterial'
-import type { PictureLookup } from '../lesson/pictures'
+import type { Picture, PictureLookup } from '../lesson/pictures'
 import { PREFERENCE_TOOL_GUIDE, PREFERENCE_TOOLS, PreferenceTools } from '../memory/preferenceTools'
 import {
   IDLE_SNAPSHOT,
@@ -66,12 +67,22 @@ const PARTIAL_WAIT_MS = 400
 /** How long a deep dive waits for the lesson window to open and its board to load. */
 const LESSON_OPEN_TIMEOUT_MS = 8000
 /** Token budgets: a normal lesson answer, and a deep dive (6-8 segments, each with its drawing). */
-const LESSON_MAX_TOKENS = 2400
-const DEEP_MAX_TOKENS = 7000
+const LESSON_MAX_TOKENS = 7200
+const DEEP_MAX_TOKENS = 21000
+/** A spoken deep dive (10-15 sentences, after any thinking). */
+const DEEP_VERBAL_MAX_TOKENS = 3600
+/** The lesson router answers with one word. */
+const ROUTE_MAX_TOKENS = 24
+/** The running conversation summary (asked to stay under 180 words). */
+const SUMMARY_MAX_TOKENS = 1800
 /** What the "go deeper" button says on the learner's behalf. */
 export const DEEP_DIVE_REQUEST = 'Go deeper on that. Explain it in depth.'
 /** How long to wait for the model to say whether a turn is a lesson request before falling back. */
 const ROUTE_TIMEOUT_MS = 3000
+/** How long a picture request waits for the picture to be found. */
+const PICTURE_WAIT_MS = 10000
+/** If nothing has been said this long after the learner finished, a brief wait line fills the silence. */
+const WAIT_LINE_DELAY_MS = 1500
 const CLOSED_LESSON_ACK = 'Okay, I closed the whiteboard.'
 const NOTHING_TO_CLOSE_ACK = "The whiteboard isn't open right now."
 
@@ -133,8 +144,10 @@ interface Reply {
   abort: AbortController
   chunker: PhraseChunker
   fullText: string
-  /** Spoken right away while the screen is checked. Part of fullText, but kept out of history. */
+  /** A wait line spoken because the answer was slow to start. Part of fullText, but kept out of history. */
   filler: string | null
+  /** Speaks the wait line if nothing has been said by then. */
+  waitTimer: ReturnType<typeof setTimeout> | null
   /** The learner asked for depth: open the whiteboard and teach a full lesson. */
   deep: boolean
   /** Which model answers when this isn't a deep dive: the fast one, or the strong one for a hard question. */
@@ -145,6 +158,8 @@ interface Reply {
   hadHistory: boolean
   /** Part of a practice or checkpoint activity the learner asked for. */
   practice: boolean
+  /** The learner asked to see a picture of `subject`; `found` is the picture once looked up (null: none to show). */
+  picture: { subject: string; found: Picture | null } | null
   /** Web pages the answer drew on, for the transcript. */
   sources: SourceLink[]
   searchFailed: boolean
@@ -200,6 +215,8 @@ export class VoiceSession {
   private lessonState = new LessonState()
   private entrySeq = 0
   private lastFiller: string | null = null
+  /** The tier that answered the last turn, so a short follow-up stays on it. */
+  private lastTier: ModelTier = 'fast'
   private readonly prefTools: PreferenceTools | null
   /** The voice the current speech socket was opened with, to notice a changed preference. */
   private ttsVoice: string | undefined
@@ -260,6 +277,7 @@ export class VoiceSession {
     this.lessonState = new LessonState()
     this.prefTools?.reset()
     this.practiceTurnsLeft = 0
+    this.lastTier = 'fast'
     this.entries = []
     this.turn = null
     this.reply = null
@@ -583,9 +601,12 @@ export class VoiceSession {
 
   private startReply(question: string, options: SubmitOptions = {}): void {
     const epoch = this.epoch
+    // Asking to see a picture is routed here, without the model: it always gets a real picture on the board.
+    const picture = options.forceDeep || options.localText ? null : pictureRequest(question)
     // Whether this turn is a lesson request is the model's call, not a keyword's. Turns with nothing lesson-like
     // in them skip that check entirely.
     const needsRoute =
+      !picture &&
       !options.forceDeep &&
       !options.localText &&
       (couldBeLessonRequest(question) || couldBePracticeRequest(question, this.practiceTurnsLeft > 0))
@@ -602,11 +623,13 @@ export class VoiceSession {
       }),
       fullText: '',
       filler: null,
+      waitTimer: null,
       deep: !!options.forceDeep,
       tier: 'fast',
       unsure: options.unsure ?? [],
       hadHistory: this.history.toMessages(3).length > 1,
       practice: false,
+      picture: picture ? { subject: picture, found: null } : null,
       sources: [],
       searchFailed: false,
       sinceFlush: '',
@@ -618,32 +641,30 @@ export class VoiceSession {
       responseDoneSent: false,
       tEndOfTurn: this.now()
     }
-    if (this.deps.config.smartRouting && !reply.deep && !reply.localText) {
-      const route = chooseModelTier({ question, screenShared: !!this.deps.contextProvider?.isWatchingScreen?.() })
-      reply.tier = route.tier
-      this.log(`[voice] model route: ${route.tier} (${route.reasons.join(', ')})`)
-    }
     this.reply = reply
     this.tts?.begin(reply.id)
     this.upsertEntry({ id: reply.id, role: 'assistant', text: '', final: false, spokenChars: 0 })
-    if (!needsRoute && !reply.localText) this.speakFiller(reply)
+    if (!reply.localText) reply.waitTimer = setTimeout(() => this.speakWaitLine(reply, epoch), WAIT_LINE_DELAY_MS)
     this.refresh()
     void this.runChat(reply, epoch, needsRoute)
   }
 
-  /** Opening the whiteboard or looking at the screen takes a moment: say so instead of going quiet. */
-  private speakFiller(reply: Reply): void {
-    const watching = !!this.deps.contextProvider?.isWatchingScreen?.()
-    const fillers =
-      reply.deep && this.canTeachOnBoard()
-        ? DEEP_FILLERS
-        : watching && asksAboutScreen(reply.question)
-          ? SCREEN_FILLERS
-          : !reply.deep && reply.tier === 'strong'
-            ? THINKING_FILLERS
-            : null
-    if (!fillers) return
-    reply.filler = this.lastFiller = pickFiller(this.lastFiller, Math.random, fillers)
+  /**
+   * ECHO starts with the answer. Only when nothing has been heard for a noticeable moment (the whiteboard opening,
+   * a picture being found, a slow first word) does it say a brief line, so the silence doesn't sound like a hang.
+   */
+  private speakWaitLine(reply: Reply, epoch: number): void {
+    reply.waitTimer = null
+    if (epoch !== this.epoch || this.reply !== reply || reply.abort.signal.aborted || reply.fullText) return
+    const lesson = this.deps.lesson
+    const lines = reply.picture
+      ? WAIT_LINES.picture
+      : reply.deep && lesson?.open && !lesson.available()
+        ? WAIT_LINES.whiteboard
+        : this.deps.contextProvider?.isWatchingScreen?.() && asksAboutScreen(reply.question)
+          ? WAIT_LINES.screen
+          : WAIT_LINES.other
+    reply.filler = this.lastFiller = pickFiller(this.lastFiller, Math.random, lines)
     this.speakPhrase(reply, { text: reply.filler, flush: false })
     this.flushSegment(reply, true)
   }
@@ -662,7 +683,7 @@ export class VoiceSession {
     try {
       await this.deps.chat.stream({
         system: ROUTER_SYSTEM,
-        maxTokens: 8,
+        maxTokens: ROUTE_MAX_TOKENS,
         cache: false,
         reasoning: 'off',
         effort: 'low',
@@ -699,9 +720,10 @@ export class VoiceSession {
   }
 
   /** Preference and other tool calls the model made while answering. */
-  private onToolUse(reply: Reply, call: ToolCall): void {
+  private onToolUse(reply: Reply, call: ToolCall): string | undefined {
     const outcome = this.prefTools?.handle(call, reply.question)
     if (outcome) this.log(`[voice] ${outcome.tool}: ${outcome.note}`)
+    return outcome?.note
   }
 
   /** The rules for the preference tools (cached with the system prompt) and the saved preferences (sent after it). */
@@ -712,12 +734,34 @@ export class VoiceSession {
 
   /**
    * Reasoning per kind of reply. Quick answers skip thinking so the first word comes fast, at low effort (short spoken
-   * answers). Whiteboard answers get medium effort for the drawing. Deep explanations may think first: the filler
-   * line and the hook cover the wait.
+   * answers). Whiteboard answers get medium effort for the drawing. Deep explanations may think first: a wait line
+   * covers a long silence.
    */
   private reasoningFor(reply: Reply, lesson: boolean): Pick<ChatRequest, 'reasoning' | 'effort'> {
-    if (reply.deep) return { reasoning: 'adaptive', effort: 'medium' }
-    return { reasoning: 'off', effort: lesson || reply.practice || reply.tier === 'strong' ? 'medium' : 'low' }
+    const cfg = this.deps.config
+    if (reply.deep) return { reasoning: 'adaptive', effort: cfg.deepEffort }
+    if (reply.tier === 'strong') return { reasoning: cfg.strongThinking, effort: cfg.strongEffort }
+    return { reasoning: 'off', effort: lesson || reply.practice ? 'medium' : 'low' }
+  }
+
+  /**
+   * Fast model or quality-first model for a turn that isn't a deep dive, decided once everything about the turn is
+   * known: whether it is taught on the whiteboard, part of a practice activity, about the screen, or a follow-up.
+   */
+  private chooseTier(reply: Reply, lesson: boolean): void {
+    if (this.deps.config.smartRouting && !reply.deep) {
+      const route = chooseModelTier({
+        question: reply.question,
+        screenShared: !!this.deps.contextProvider?.isWatchingScreen?.(),
+        lesson,
+        practice: reply.practice,
+        previousTier: this.lastTier,
+        routes: this.deps.config.qualityRoutes
+      })
+      reply.tier = route.tier
+      this.log(`[voice] model route: ${route.tier} (${route.reasons.join(', ')})`)
+    }
+    this.lastTier = reply.deep ? 'strong' : reply.tier
   }
 
   /** Sources and failed searches for the transcript; failures are said out loud by the model and shown here too. */
@@ -756,7 +800,7 @@ export class VoiceSession {
         cache: false,
         reasoning: 'off',
         effort: 'low',
-        maxTokens: 600,
+        maxTokens: SUMMARY_MAX_TOKENS,
         messages: [{ role: 'user', content: summaryRequest(plan.previous, plan.turns) }],
         signal: ctl.signal,
         onText: (d) => (text += d)
@@ -854,6 +898,11 @@ export class VoiceSession {
     })
     reply.lessonTurn = turn
     const parser = new SegmentStreamParser()
+    let first = true
+    const deliver = (seg: ParsedSegment): void => {
+      turn.onTutorSegment(first ? this.withPicture(reply, seg) : seg)
+      first = false
+    }
     try {
       const [lessonContext, context] = await Promise.all([
         this.lessonContextFor(board),
@@ -870,7 +919,7 @@ export class VoiceSession {
         turnContext: buildTurnContext(
           context,
           reply.filler,
-          [lessonContext, study.context, this.repairNotes(reply, !!context?.screenImage, true)].filter(Boolean).join('\n\n') || null
+          [lessonContext, study.context, this.pictureNote(reply, true), this.repairNotes(reply, !!context?.screenImage, true)].filter(Boolean).join('\n\n') || null
         ),
         maxTokens: Math.max(this.deps.config.claudeMaxTokens, reply.deep ? DEEP_MAX_TOKENS : LESSON_MAX_TOKENS),
         deep: reply.deep,
@@ -878,7 +927,7 @@ export class VoiceSession {
         ...this.reasoningFor(reply, true),
         ...this.toolsForRequest(),
         ...research.options,
-        onToolUse: (call) => alive() && this.onToolUse(reply, call),
+        onToolUse: (call) => (alive() ? this.onToolUse(reply, call) : undefined),
         onResult: (result) => alive() && this.onChatResult(reply, result),
         messages,
         image: context?.screenImage,
@@ -887,7 +936,7 @@ export class VoiceSession {
           if (!alive()) return
           this.setSearching(reply, false)
           if (reply.tFirstText === undefined) reply.tFirstText = this.now()
-          for (const seg of parser.push(delta)) turn.onTutorSegment(seg)
+          for (const seg of parser.push(delta)) deliver(seg)
         }
       })
     } catch (err) {
@@ -903,8 +952,53 @@ export class VoiceSession {
       return
     }
     if (!alive()) return
-    for (const seg of parser.end()) turn.onTutorSegment(seg)
+    for (const seg of parser.end()) deliver(seg)
     turn.onTutorDone()
+  }
+
+  private pictureId(reply: Reply): string {
+    return `picture_${reply.id}`
+  }
+
+  /**
+   * A picture request: look the picture up (opening the whiteboard alongside, if it is closed). The lookup is
+   * cached, so placing it on the board later finds it again at once.
+   */
+  private async preparePicture(reply: Reply): Promise<void> {
+    const lesson = this.deps.lesson
+    const picture = reply.picture!
+    if (!lesson?.pictures) return
+    const lookup = lesson.pictures.find({ search: picture.subject }, reply.abort.signal)
+    const open = lesson.available() || (lesson.open ? await lesson.open(LESSON_OPEN_TIMEOUT_MS).catch(() => false) : false)
+    if (!open) return
+    picture.found = await timeout(lookup, PICTURE_WAIT_MS).catch(() => null)
+    this.log(`[voice] picture request "${picture.subject}": ${picture.found ? 'found' : 'none found'}`)
+  }
+
+  /** What the tutor is told about a picture request: what is on the board, or that there is nothing to show. */
+  private pictureNote(reply: Reply, boardOpen: boolean): string | null {
+    const p = reply.picture
+    if (!p) return null
+    if (boardOpen && p.found) {
+      return `<picture_request>
+The learner asked to see a picture of "${p.subject}". The app found one (Wikimedia Commons file "${p.found.title}") and puts it on the whiteboard with id "${this.pictureId(reply)}" in your first segment. Start by pointing the learner to it in one sentence, then say briefly what it shows. You can't see it, so describe the subject, not this photo. You may label or highlight it; don't draw another picture of it or a shape labelled with its name.
+</picture_request>`
+    }
+    const why = boardOpen ? 'no picture of it could be found' : "pictures can't be shown right now because the whiteboard isn't available"
+    return `<picture_request>
+The learner asked to see a picture of "${p.subject}", but ${why}. Say so plainly in one sentence, then describe what it looks like in a few spoken sentences. Never present its name, or a shape labelled with it, as the picture.
+</picture_request>`
+  }
+
+  /** Makes sure the first segment of a picture request shows the picture, whatever the tutor drew. */
+  private withPicture(reply: Reply, seg: ParsedSegment): ParsedSegment {
+    const p = reply.picture
+    if (!p?.found) return seg
+    const plan = seg.drawing?.plan
+    if (plan && [...plan.setup, ...plan.cues.flatMap((c) => c.ops)].some((op) => op.op === 'image')) return seg
+    const image: VisualPlan['setup'][number] = { op: 'image', id: this.pictureId(reply), search: p.subject, size: 'large' }
+    const setup = [image, ...(plan?.setup ?? [])].slice(0, 8)
+    return { ...seg, drawing: { plan: { ...(plan ?? { cues: [] }), no_visual: false, setup } } }
   }
 
   /** Notes for the model when the question may have been misheard, or points at something it can't see. */
@@ -964,7 +1058,6 @@ export class VoiceSession {
       reply.deep = action === 'deep_dive'
       if (action === 'practice') this.practiceTurnsLeft = PRACTICE_MAX_TURNS
       if (action === 'end_practice') this.practiceTurnsLeft = 0
-      this.speakFiller(reply)
     }
     // A practice activity keeps its pack loaded while the learner answers, up to PRACTICE_MAX_TURNS turns.
     if (this.practiceTurnsLeft > 0) {
@@ -972,11 +1065,16 @@ export class VoiceSession {
       this.practiceTurnsLeft -= 1
     }
     if (reply.deep && lesson?.open && !lesson.available()) {
-      // The filler is already playing; the lesson starts as soon as the board can be drawn on.
+      // The lesson starts as soon as the board can be drawn on (a wait line covers a slow open).
       const opened = await lesson.open(LESSON_OPEN_TIMEOUT_MS).catch(() => false)
       if (!alive()) return
       if (!opened) this.log('[voice] lesson window did not open in time; explaining without the whiteboard')
     }
+    if (reply.picture) {
+      await this.preparePicture(reply)
+      if (!alive()) return
+    }
+    this.chooseTier(reply, !!lesson?.available())
     if (lesson?.available()) return this.runLessonChat(reply, epoch)
     try {
       const context = (await this.deps.contextProvider?.getContext().catch(() => null)) ?? null
@@ -990,13 +1088,13 @@ export class VoiceSession {
         turnContext: buildTurnContext(
           context,
           reply.filler,
-          [study.context, this.repairNotes(reply, !!context?.screenImage, false)].filter(Boolean).join('\n\n') || null
+          [study.context, this.pictureNote(reply, false), this.repairNotes(reply, !!context?.screenImage, false)].filter(Boolean).join('\n\n') || null
         ),
-        ...(reply.deep ? { maxTokens: Math.max(this.deps.config.claudeMaxTokens, 1200), deep: true } : { tier: reply.tier }),
+        ...(reply.deep ? { maxTokens: Math.max(this.deps.config.claudeMaxTokens, DEEP_VERBAL_MAX_TOKENS), deep: true } : { tier: reply.tier }),
         ...this.reasoningFor(reply, false),
         ...this.toolsForRequest(),
         ...research.options,
-        onToolUse: (call) => alive() && this.onToolUse(reply, call),
+        onToolUse: (call) => (alive() ? this.onToolUse(reply, call) : undefined),
         onResult: (result) => alive() && this.onChatResult(reply, result),
         messages: this.history.toMessages(this.deps.config.historyMessages),
         image: context?.screenImage,
@@ -1133,6 +1231,8 @@ export class VoiceSession {
   private finishReply(r: Reply, interrupted: boolean): void {
     if (this.reply !== r) return
     this.reply = null
+    if (r.waitTimer) clearTimeout(r.waitTimer)
+    r.waitTimer = null
     this.setSearching(r, false)
     if (!interrupted) r.lessonTurn?.onComplete()
     let delivered: string
@@ -1249,6 +1349,7 @@ export class VoiceSession {
     if (this.releaseTimer) clearTimeout(this.releaseTimer)
     this.releaseTimer = null
     this.reply?.abort.abort()
+    if (this.reply?.waitTimer) clearTimeout(this.reply.waitTimer)
     this.reply = null
     if (this.pendingStop) clearTimeout(this.pendingStop.timer)
     this.pendingStop = null

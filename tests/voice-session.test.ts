@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readVoiceConfig } from '../src/main/voice/config'
 import { ChatError, type ChatPort, type ChatRequest, type EnginePort, type SttHooks, type SttPort, type TtsHooks, type TtsPort, type TurnInfo, type VoiceContextProvider } from '../src/main/voice/ports'
-import { SCREEN_FILLERS } from '../src/main/voice/intent'
+import { WAIT_LINES } from '../src/main/voice/intent'
 import { VoiceSession } from '../src/main/voice/session'
 import type { VoiceEvent } from '../src/shared/voice'
 
@@ -650,25 +650,35 @@ describe('screen context', () => {
     expect(b.chat.calls[1].webSearch).toEqual({ maxUses: 2 })
   })
 
-  it('says a filler line right away, then answers with the screenshot attached', async () => {
+  it('starts with the answer when it comes quickly, with no announcement first', async () => {
     const b = setup(watching())
     b.ready()
-    b.chat.next(reply('It is a login form. ', 'The password field is empty.'))
-    b.stts.at(-1)!.turn('StartOfTurn', 'Hey do you see this', 0)
-    b.stts.at(-1)!.turn('EndOfTurn', 'Hey, do you see this thing on my screen?', 0)
-
-    // Spoken and flushed before Claude (or the screenshot) has come back.
-    const tts = b.ttss.at(-1)!
-    const filler = tts.spoken[0]?.trim()
-    expect(SCREEN_FILLERS).toContain(filler)
-    expect(tts.flushes).toBe(1)
-
-    await flushMicrotasks()
+    b.chat.next(reply('It is a login form.'))
+    await ask(b, 'Do you see this thing on my screen?')
+    vi.advanceTimersByTime(5000)
+    expect(b.ttss.at(-1)!.spoken.join('')).toBe('It is a login form. ')
     expect(b.chat.calls[0].image).toEqual(SHOT)
-    expect(b.chat.calls[0].turnContext).toContain('<already_said>')
+  })
+
+  it('says one brief wait line only after a noticeable silence, then answers', async () => {
+    const b = setup(watching())
+    b.ready()
+    b.chat.next(async (req) => {
+      await new Promise((r) => setTimeout(r, 3000)) // a slow first word
+      await reply('It is a login form. ', 'The password field is empty.')(req)
+    })
+    await ask(b, 'Hey, do you see this thing on my screen?')
+    const tts = b.ttss.at(-1)!
+    vi.advanceTimersByTime(1000)
+    expect(tts.spoken).toEqual([])
+    vi.advanceTimersByTime(600)
+    expect(WAIT_LINES.screen).toContain(tts.spoken[0]?.trim())
+    expect(tts.flushes).toBe(1)
+    vi.advanceTimersByTime(2000)
+    await flushMicrotasks()
     expect(tts.spoken.slice(1).join('')).toContain('It is a login form.')
 
-    // The filler is heard but is not part of the conversation history.
+    // The wait line is heard but is not part of the conversation history.
     for (let seg = 0; seg < tts.flushes; seg++) tts.flushed('r1', seg)
     b.session.onPlayback({ kind: 'started', responseId: 'r1', at: 1 })
     b.session.onPlayback({ kind: 'ended', responseId: 'r1', at: 2 })
@@ -697,12 +707,13 @@ describe('screen context', () => {
     expect(b.chat.calls[0].turnContext).toContain('Not sharing.')
   })
 
-  it('an interruption during the filler keeps the question open', async () => {
+  it('an interruption during the wait line keeps the question open', async () => {
     const b = setup(watching())
     b.ready()
     b.chat.next(never())
     b.chat.next(reply('That is a for loop.'))
     await ask(b, 'Can you look at')
+    vi.advanceTimersByTime(1600) // nothing came back, so the wait line plays
     b.ttss.at(-1)!.audio('r1')
     b.session.onPlayback({ kind: 'started', responseId: 'r1', at: 1 })
 

@@ -10,14 +10,14 @@ type Body = Record<string, any>
 const ev = (name: string, data: unknown): string => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
 
 /** A streamed reply made of the given content blocks (text blocks may carry citations). */
-function sse(model: string, blocks: Array<Record<string, any>>, usage: Record<string, unknown> = {}): string {
+function sse(model: string, blocks: Array<Record<string, any>>, usage: Record<string, unknown> = {}, stopReason = 'end_turn'): string {
   let out = ev('message_start', { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1, ...usage } } })
   blocks.forEach((block, index) => {
     if (block.type === 'text') {
       out += ev('content_block_start', { type: 'content_block_start', index, content_block: { type: 'text', text: '', citations: block.citations ? [] : null } })
       for (const c of block.citations ?? []) out += ev('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'citations_delta', citation: c } })
       out += ev('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } })
-    } else if (block.type === 'server_tool_use') {
+    } else if (block.type === 'server_tool_use' || block.type === 'tool_use') {
       out += ev('content_block_start', { type: 'content_block_start', index, content_block: { ...block, input: {} } })
       out += ev('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input) } })
     } else {
@@ -25,7 +25,7 @@ function sse(model: string, blocks: Array<Record<string, any>>, usage: Record<st
     }
     out += ev('content_block_stop', { type: 'content_block_stop', index })
   })
-  out += ev('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1, ...usage } })
+  out += ev('message_delta', { type: 'message_delta', delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: 1, ...usage } })
   return out + ev('message_stop', { type: 'message_stop' })
 }
 
@@ -64,6 +64,23 @@ async function ask(chat: ClaudeChat, cfg: ReturnType<typeof config>, extra: Part
   })
   return { text, result: result as ChatResult | null, fetchStarted }
 }
+
+describe('client tool calls', () => {
+  it('sends the outcome back so the reply goes on after the call', async () => {
+    const cfg = config()
+    const call = { type: 'tool_use', id: 'toolu_1', name: 'remember_preference', input: { key: 'visualStyle', value: 'diagrams' } }
+    const api = fakeApi((b, n) => ok(n === 1 ? sse(b.model, [call], {}, 'tool_use') : sse(b.model, [{ type: 'text', text: 'Saved. Now, recursion…' }])))
+    const calls: unknown[] = []
+    const { text } = await ask(new ClaudeChat(cfg, api.client, () => {}), cfg, {
+      onToolUse: (c) => (calls.push(c), 'saved visualStyle')
+    })
+    expect(calls).toEqual([{ name: 'remember_preference', input: call.input }])
+    expect(text).toBe('Saved. Now, recursion…')
+    const sent = api.bodies[1].messages as Array<{ role: string; content: any }>
+    expect(sent.at(-2)!.content[0]).toMatchObject({ type: 'tool_use', id: 'toolu_1' })
+    expect(sent.at(-1)!.content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'toolu_1' })
+  })
+})
 
 describe('web fetch', () => {
   it('quick answers on the fast model get the basic search and fetch, next to code execution', async () => {
