@@ -9,7 +9,7 @@ export interface Rect {
   h: number
 }
 
-export const FONT = { node: 18, edge: 16, title: 22, small: 15 } as const
+export const FONT = { node: 18, edge: 16, title: 26, small: 15 } as const
 /** Average glyph width as a fraction of font size; deliberately generous so text never overflows its box. */
 const CHAR_W = 0.6
 const LINE_H = 1.3
@@ -79,7 +79,9 @@ export interface LaidOut {
   size: { w: number; h: number }
 }
 
-const MAX_ROW_W = 1050
+// Rows wrap only when very long: the camera frames each new diagram, so a wide row reads better than a
+// second row joined by a long diagonal arrow.
+const MAX_ROW_W = 2100
 
 /** Extra space between neighbours so arrow labels fit on the arrow. */
 function gapFor(edges: EdgeLike[], base: number): number {

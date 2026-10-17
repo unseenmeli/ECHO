@@ -12,6 +12,8 @@ export interface VoiceConfig {
   deepgramApiKey: string
 
   claudeModel: string
+  /** Model for deep-dive lessons, where depth matters more than the first word arriving fast. */
+  deepModel: string
   claudeMaxTokens: number
   /** Thinking adds latency before the first spoken word; turn it off where the model allows it. */
   claudeDisableThinking: boolean
@@ -92,6 +94,7 @@ export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigRes
       anthropicWorkspaceId: env.ANTHROPIC_WORKSPACE_ID?.trim() || null,
       deepgramApiKey,
       claudeModel: env.ECHO_CLAUDE_MODEL?.trim() || 'claude-haiku-5-5',
+      deepModel: env.ECHO_DEEP_MODEL?.trim() || 'claude-sonnet-5-5',
       claudeMaxTokens: num(env.ECHO_CLAUDE_MAX_TOKENS, 400, 50, 4000),
       claudeDisableThinking: bool(env.ECHO_CLAUDE_DISABLE_THINKING, true),
       historyMessages: num(env.ECHO_HISTORY_MESSAGES, 24, 2, 200),

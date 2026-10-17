@@ -32,6 +32,7 @@ class VoiceHost {
   private configError: VoiceSnapshot | null = null
   private envLoaded = false
   private canCaptureScreen: (wc: Electron.WebContents) => boolean = () => false
+  private openLesson: (timeoutMs: number) => Promise<boolean> = async () => false
 
   // --- EnginePort ---------------------------------------------------------------------
   private readonly enginePort: EnginePort = {
@@ -45,9 +46,15 @@ class VoiceHost {
     duck: (on) => this.toEngine('voice-engine:duck', on)
   }
 
-  /** @param canCaptureScreen The window allowed to share the screen (the companion). */
-  register(options: { canCaptureScreen?(wc: Electron.WebContents): boolean } = {}): void {
+  /**
+   * @param canCaptureScreen The window allowed to share the screen (the companion).
+   * @param openLesson Opens the lesson window and resolves once its board is ready.
+   */
+  register(
+    options: { canCaptureScreen?(wc: Electron.WebContents): boolean; openLesson?(timeoutMs: number): Promise<boolean> } = {}
+  ): void {
     if (options.canCaptureScreen) this.canCaptureScreen = options.canCaptureScreen
+    if (options.openLesson) this.openLesson = options.openLesson
     this.setupPermissions()
     // Test/diagnostic hook, never on by default: lets the e2e harness read the live whiteboard.
     if (!app.isPackaged && process.env.ECHO_DEBUG_HOOKS === '1') (globalThis as Record<string, unknown>).__echoBoard = board
@@ -97,6 +104,11 @@ class VoiceHost {
 
   isActive(): boolean {
     return !!this.session?.isActive()
+  }
+
+  /** "Go deeper" on the current conversation. False when no conversation has anything to go deeper on. */
+  deepDive(): boolean {
+    return !!this.session?.deepDive()
   }
 
   /** Ends any conversation (used on app quit). */
@@ -153,7 +165,9 @@ class VoiceHost {
     }
     this.configError = null
 
-    if (process.platform === 'darwin') {
+    // Chromium's fake capture device (end-to-end tests) never touches the real microphone, so there is
+    // nothing to ask permission for.
+    if (process.platform === 'darwin' && !app.commandLine.hasSwitch('use-fake-device-for-media-stream')) {
       const granted = await systemPreferences.askForMediaAccess('microphone').catch(() => false)
       if (!granted) {
         this.configError = {
@@ -179,6 +193,7 @@ class VoiceHost {
       lesson: {
         available: () => cfg.visualsEnabled && isBoardOpen(),
         board: () => (isBoardOpen() ? board : null),
+        open: (timeoutMs) => (cfg.visualsEnabled ? this.openLesson(timeoutMs) : Promise.resolve(false)),
       },
       contextProvider: screenVoiceContext,
       emit: (e) => this.broadcast(e),

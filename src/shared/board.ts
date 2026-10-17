@@ -75,8 +75,18 @@ export interface BoardBatch {
   patch: ElementPatch[]
   remove: string[]
   bindings: BindingSpec[]
-  /** Animate the camera to show these elements. */
-  focus?: { ids: string[]; /** The content is larger than the free area: zoom out so all of it is visible. */ fit?: boolean }
+  /**
+   * Animate the camera to these elements. "frame" centres and sizes the view around newly drawn content;
+   * "pan" glides to what the narration is about without changing the zoom unless it doesn't fit.
+   */
+  focus?: {
+    ids: string[]
+    mode?: 'frame' | 'pan'
+    /** What the focused elements belong to (e.g. their diagram): kept in view while panning when it fits. */
+    context?: string[]
+    /** The content is larger than the free area: zoom out so all of it is visible. */
+    fit?: boolean
+  }
 }
 
 export interface BatchResult {

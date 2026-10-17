@@ -60,6 +60,8 @@ export interface ChatRequest {
   system: string
   /** Overrides the configured reply budget (lesson replies carry segment markup). */
   maxTokens?: number
+  /** Use the deep-dive model for this request. */
+  deep?: boolean
   messages: ChatMessage[]
   /** Screenshot for this turn only; attached to the latest user message, never stored in history. */
   image?: ScreenImage

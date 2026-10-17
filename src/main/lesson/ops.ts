@@ -4,7 +4,7 @@ import { z } from 'zod'
 // operations; our renderer turns them into laid-out, styled elements. They are
 // validated before anything touches the board, and are treated purely as data.
 
-export const COLORS = ['neutral', 'blue', 'green', 'orange', 'red', 'purple'] as const
+export const COLORS = ['neutral', 'pink', 'blue', 'green', 'orange', 'red', 'purple'] as const
 export const SIDES = ['right', 'left', 'above', 'below'] as const
 
 /** Logical ids: short snake_case names the agent invents and reuses across the lesson. */
@@ -73,7 +73,7 @@ const TableOp = z
     id: Id,
     title: Label.optional(),
     columns: z.array(z.string().min(1).max(24)).min(2).max(5),
-    rows: z.array(z.array(z.string().max(32)).min(2).max(5)).min(1).max(6),
+    rows: z.array(z.array(z.string().max(60)).min(2).max(5)).min(1).max(6),
     new_region: z.boolean().optional()
   })
   .describe('A comparison table. Every row has one cell per column.')

@@ -20,12 +20,12 @@ describe('lesson controller: speech and drawing stay in step', () => {
     expect(t.board.batches).toHaveLength(1) // sentence 0 has no cue
     t.turn.onSegmentStart(1, Date.now())
     await until(() => t.board.batches.length === 2)
-    expect(t.board.batches[1].upsert.map((s) => s.id)).toEqual(['echo:hl_d1_b']) // exactly the cued highlight
+    expect(t.board.batches[1].upsert.map((s) => s.id)).toEqual(['echo:hl_d1_b__glow', 'echo:hl_d1_b']) // exactly the cued highlight (glow + ring)
     expect(t.spoken).toHaveLength(3)
 
     t.turn.onSegmentStart(2, Date.now()) // last sentence of segment 1 begins -> the next segment may go
     await until(() => t.spoken.length === 4)
-    expect(t.board.batches.some((b) => b.upsert[0]?.id === 'echo:hl_d1_c')).toBe(true)
+    expect(t.board.batches.some((b) => b.upsert.some((s) => s.id === 'echo:hl_d1_c'))).toBe(true)
     expect(t.finished()).toBe(1)
   })
 
@@ -158,7 +158,7 @@ describe('lesson controller: interruption and stale work', () => {
     await until(() => t.board.batches.length === 2)
     const user = t.board.elements.find((e) => e.id === 'user1')!
     expect([user.x, user.y]).toEqual([700, 400])
-    expect(t.board.batches[1].upsert[0].x).toBeCloseTo(700 - 8) // the ring follows where they moved it
+    expect(t.board.batches[1].upsert.find((s) => s.id === 'echo:hl_user_user1')!.x).toBeCloseTo(700 - 11) // the ring follows where they moved it
     expect(t.board.batches.flatMap((b) => b.remove)).not.toContain('user1')
   })
 

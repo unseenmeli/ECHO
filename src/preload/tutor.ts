@@ -10,6 +10,8 @@ type RequestHandler = (method: BoardMethod, args: unknown[]) => Promise<unknown>
 const api = {
   loadBoard: (): Promise<SavedBoard | null> => ipcRenderer.invoke('board:load'),
   saveBoard: (scene: SavedBoard): void => ipcRenderer.send('board:save', scene),
+  /** The board answers requests from now on. */
+  boardReady: (): void => ipcRenderer.send('board:ready'),
   handleBoardRequests: (handler: RequestHandler): (() => void) => {
     const listener = (_e: unknown, id: string, method: BoardMethod, args: unknown[]): void => {
       handler(method, args).then(

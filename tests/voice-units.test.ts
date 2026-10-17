@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { PhraseChunker, sanitizeForSpeech } from '../src/main/voice/chunker'
 import { EchoGuard } from '../src/main/voice/echoGuard'
 import { ConversationHistory } from '../src/main/voice/history'
-import { asksAboutScreen, classifyIntent, isNoise, pickFiller, SCREEN_FILLERS } from '../src/main/voice/intent'
+import { asksAboutScreen, classifyIntent, DEEP_FILLERS, isNoise, pickFiller, SCREEN_FILLERS, wantsDeepDive } from '../src/main/voice/intent'
 import { buildSystemPrompt, TUTOR_SYSTEM_PROMPT, withImage } from '../src/main/voice/claude'
 import { readVoiceConfig } from '../src/main/voice/config'
 import { parseVoiceCommand } from '../src/shared/voice'
@@ -101,6 +101,29 @@ describe('intent', () => {
     for (const t of ['What is a variable?', 'Explain recursion more simply.', 'Give me an example.']) {
       expect(asksAboutScreen(t)).toBe(false)
     }
+  })
+  it('recognizes requests for a deep dive', () => {
+    for (const t of [
+      'Explain CI/CD deeply',
+      'Can you go in depth on recursion?',
+      'go deeper',
+      'Give me a deep dive into DNS',
+      'Explain it properly',
+      'break CI/CD down for me',
+      'walk me through how TLS works',
+      'Teach me Kubernetes',
+      'explain this in detail',
+      'I want the heavy explanation',
+      'draw it on the board'
+    ]) {
+      expect(wantsDeepDive(t), t).toBe(true)
+    }
+    for (const t of ['What is deep learning?', 'What is CI/CD?', 'Thanks!', 'What is a variable?']) {
+      expect(wantsDeepDive(t), t).toBe(false)
+    }
+  })
+  it('picks fillers from the list it is given', () => {
+    expect(DEEP_FILLERS).toContain(pickFiller(null, Math.random, DEEP_FILLERS))
   })
   it('never picks the same filler twice in a row', () => {
     let prev: string | null = null
