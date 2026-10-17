@@ -1,5 +1,6 @@
 import { useRef, type PointerEvent } from 'react'
 import { CharacterSprite } from './CharacterSprite'
+import { useVoice } from './voice/useVoice'
 
 // Dragging is done by hand rather than with -webkit-app-region: drag, because
 // native drag regions swallow mouse events and :hover would never fire. The
@@ -30,9 +31,12 @@ function useWindowDrag() {
 
 export function Companion() {
   const drag = useWindowDrag()
+  const { snapshot } = useVoice()
+  const voiceOn = snapshot.state !== 'idle' && snapshot.state !== 'error'
+  const voiceLabel = voiceOn ? 'End conversation' : 'Start conversation'
 
   return (
-    <main className="companion">
+    <main className="companion" data-voice={snapshot.state}>
       <div className="character" title="Drag to move" {...drag}>
         <CharacterSprite />
       </div>
@@ -52,11 +56,13 @@ export function Companion() {
         <span className="controls-divider" aria-hidden="true" />
         <button
           className="glass-button"
-          aria-label="Ask a question"
-          title="Ask a question"
-          onClick={() => window.companion.ask()}
+          aria-label={voiceLabel}
+          aria-pressed={voiceOn}
+          title={snapshot.state === 'error' && snapshot.message ? snapshot.message : voiceLabel}
+          onClick={() => window.voice.command({ type: 'toggle' })}
         >
           <span className="glyph-question">?</span>
+          {snapshot.state !== 'idle' && <span className="voice-dot" aria-hidden="true" />}
         </button>
         <span className="controls-divider" aria-hidden="true" />
         <button

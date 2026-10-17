@@ -190,7 +190,77 @@ body,
   transform: translateX(1px);
 }
 
+/* Voice conversation feedback: the pill stays visible while a conversation is
+   active, "?" shows its state, and the character animates a little faster
+   while ECHO is speaking. */
+.glass-button {
+  position: relative;
+}
+
+.companion:not([data-voice='idle']):not([data-voice='error']) .controls {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+
+.glass-button[aria-pressed='true'] {
+  background: var(--glass-pressed);
+}
+
+.voice-dot {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #8e8e93;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.7);
+}
+
+.companion[data-voice='connecting'] .voice-dot,
+.companion[data-voice='thinking'] .voice-dot {
+  background: #ff9f0a;
+  animation: voice-pulse 1s ease-in-out infinite;
+}
+
+.companion[data-voice='listening'] .voice-dot,
+.companion[data-voice='paused'] .voice-dot {
+  background: #30d158;
+}
+
+.companion[data-voice='user-speaking'] .voice-dot {
+  background: #0a84ff;
+  animation: voice-pulse 0.7s ease-in-out infinite;
+}
+
+.companion[data-voice='speaking'] .voice-dot {
+  background: #bf5af2;
+  animation: voice-pulse 0.6s ease-in-out infinite;
+}
+
+.companion[data-voice='error'] .voice-dot {
+  background: #ff453a;
+}
+
+.companion[data-voice='speaking'] .character {
+  animation-duration: 1.6s;
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.35);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .voice-dot {
+    animation: none !important;
+  }
   .character {
     animation: none;
   }
