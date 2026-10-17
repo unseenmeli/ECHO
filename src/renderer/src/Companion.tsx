@@ -38,24 +38,8 @@ export function Companion() {
   const voiceOn = snapshot.state !== 'idle' && snapshot.state !== 'error'
   const voiceLabel = voiceOn ? 'End conversation' : 'Start conversation'
 
-  // Questions are about the screen, so starting a conversation also offers to
-  // share it first. Cancelling the picker still starts the conversation, and the
-  // picker is not offered again until sharing has been turned on (the tray menu
-  // always offers it), so repeated clicks never keep popping the menu up.
-  const pickerDeclined = useRef(false)
-  const starting = useRef(false)
-  const toggleVoice = async (): Promise<void> => {
-    if (starting.current) return // a click while the picker is open must not toggle the conversation again
-    starting.current = true
-    try {
-      if (!voiceOn && screen.status === 'off' && !pickerDeclined.current) {
-        pickerDeclined.current = !(await screen.start())
-      }
-      window.voice.command({ type: 'toggle' })
-    } finally {
-      starting.current = false
-    }
-  }
+  // Starting a conversation never asks to share the screen; sharing is turned on from the tray menu.
+  const toggleVoice = (): void => window.voice.command({ type: 'toggle' })
 
   return (
     <main className="companion" data-voice={snapshot.state}>
@@ -94,7 +78,7 @@ export function Companion() {
           aria-label={voiceLabel}
           aria-pressed={voiceOn}
           title={snapshot.state === 'error' && snapshot.message ? snapshot.message : voiceLabel}
-          onClick={() => void toggleVoice()}
+          onClick={toggleVoice}
         >
           <span className="glyph-question">?</span>
           {snapshot.state !== 'idle' && <span className="voice-dot" aria-hidden="true" />}

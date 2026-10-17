@@ -1,5 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { EFFORTS, type Effort } from './ports'
+import { parseQualityRoutes, type QualityRoute } from './routing'
 
 // Everything tunable lives here and is read from the environment, so models,
 // voice and turn-detection can change without touching code. Credentials are
@@ -18,6 +20,13 @@ export interface VoiceConfig {
   strongModel: string
   /** Send hard questions to strongModel even when nobody asked for a deep dive. */
   smartRouting: boolean
+  /** Which kinds of turn go to strongModel: reasoning, screen, lesson, practice, follow-up. */
+  qualityRoutes: Set<QualityRoute>
+  /** Whether strongModel may think before answering (adaptive), and how hard it works. */
+  strongThinking: 'adaptive' | 'off'
+  strongEffort: Effort
+  /** How hard deepModel works on a deep dive (it always thinks first). */
+  deepEffort: Effort
   claudeMaxTokens: number
   /** Thinking adds latency before the first spoken word; turn it off where the model allows it. */
   claudeDisableThinking: boolean
@@ -78,6 +87,11 @@ const num = (v: string | undefined, fallback: number, min: number, max: number):
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback
 }
 
+const effort = (v: string | undefined, fallback: Effort): Effort => {
+  const e = v?.trim().toLowerCase()
+  return (EFFORTS as readonly string[]).includes(e ?? '') ? (e as Effort) : fallback
+}
+
 const bool = (v: string | undefined, fallback: boolean): boolean => {
   if (v === undefined || v.trim() === '') return fallback
   return /^(1|true|yes|on)$/i.test(v.trim())
@@ -123,7 +137,11 @@ export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigRes
       deepModel: env.ECHO_DEEP_MODEL?.trim() || 'claude-sonnet-5-5',
       strongModel: env.ECHO_STRONG_MODEL?.trim() || env.ECHO_DEEP_MODEL?.trim() || 'claude-sonnet-5-5',
       smartRouting: bool(env.ECHO_SMART_ROUTING, true),
-      claudeMaxTokens: num(env.ECHO_CLAUDE_MAX_TOKENS, 400, 50, 4000),
+      qualityRoutes: parseQualityRoutes(env.ECHO_QUALITY_ROUTES),
+      strongThinking: /^(off|false|0|no)$/i.test(env.ECHO_STRONG_THINKING?.trim() ?? '') ? 'off' : 'adaptive',
+      strongEffort: effort(env.ECHO_STRONG_EFFORT, 'high'),
+      deepEffort: effort(env.ECHO_DEEP_EFFORT, 'high'),
+      claudeMaxTokens: num(env.ECHO_CLAUDE_MAX_TOKENS, 1200, 50, 4000),
       claudeDisableThinking: bool(env.ECHO_CLAUDE_DISABLE_THINKING, true),
       historyMessages: num(env.ECHO_HISTORY_MESSAGES, 24, 2, 200),
       sttModel: env.ECHO_STT_MODEL?.trim() || 'flux-general-en',

@@ -7,11 +7,11 @@ import {
   classifyIntent,
   closeFallback,
   couldBeLessonRequest,
-  DEEP_FILLERS,
   isNoise,
   parseRoute,
   pickFiller,
-  SCREEN_FILLERS
+  pictureRequest,
+  WAIT_LINES
 } from '../src/main/voice/intent'
 import { buildSystemPrompt, buildTurnContext, TUTOR_SYSTEM_PROMPT, withImage } from '../src/main/voice/claude'
 import { readVoiceConfig } from '../src/main/voice/config'
@@ -183,17 +183,30 @@ describe('intent', () => {
       expect(closeFallback(t), t).toBe('none')
     }
   })
-  it('picks fillers from the list it is given', () => {
-    expect(DEEP_FILLERS).toContain(pickFiller(null, Math.random, DEEP_FILLERS))
+  it('picks wait lines from the list it is given', () => {
+    expect(WAIT_LINES.picture).toContain(pickFiller(null, Math.random, WAIT_LINES.picture))
   })
-  it('never picks the same filler twice in a row', () => {
+  it('never picks the same wait line twice in a row', () => {
     let prev: string | null = null
     for (let i = 0; i < 50; i++) {
       const next = pickFiller(prev)
-      expect(SCREEN_FILLERS).toContain(next)
+      expect(WAIT_LINES.other).toContain(next)
       expect(next).not.toBe(prev)
       prev = next
     }
+  })
+})
+
+describe('picture requests', () => {
+  it('finds what the learner wants to see, and leaves other uses of "picture" alone', () => {
+    expect(pictureRequest('Show me a picture of a neuron')).toBe('neuron')
+    expect(pictureRequest('Can I see a photo of the Eiffel Tower, please?')).toBe('Eiffel Tower')
+    expect(pictureRequest('What does a pangolin look like?')).toBe('pangolin')
+    expect(pictureRequest('Put an image of a mitochondrion on the board')).toBe('mitochondrion')
+    expect(pictureRequest('What is a neuron?')).toBeNull()
+    expect(pictureRequest('I want the big picture of how inflation works')).toBeNull()
+    expect(pictureRequest('What does it look like?')).toBeNull()
+    expect(pictureRequest('I took a picture of my notes')).toBeNull()
   })
 })
 

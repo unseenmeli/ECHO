@@ -25,13 +25,13 @@ export const screenVoiceContext: VoiceContextProvider = {
     if (status === 'off') {
       return {
         screen:
-          'The user is not sharing their screen, so you cannot see it. If they ask about something on it, say so and tell them to choose "Share Screen…" from ECHO\'s menu-bar icon.'
+          'The user is not sharing their screen, so you cannot see it. Do not bring this up on your own. If they ask about something on it, say so and tell them to choose "Share Screen…" from ECHO\'s menu-bar icon.'
       }
     }
     if (status === 'paused') {
       return {
         screen:
-          'The user paused screen watching, so you cannot see their screen right now. If they ask about it, tell them to click the "Paused" pill above you to resume.'
+          'The user paused screen watching, so you cannot see their screen right now. Do not bring this up on your own. If they ask about it, tell them to click the "Paused" pill above you to resume.'
       }
     }
     const frame = await currentFrame()
@@ -43,7 +43,7 @@ export const screenVoiceContext: VoiceContextProvider = {
     }
     const source = frame.sourceLabel ? `"${frame.sourceLabel}"` : 'their screen'
     return {
-      screen: `The image attached to the user's latest message is a live screenshot of ${source}, taken as they finished speaking. Use it whenever their question could involve what's on screen, and describe only what you can actually see in it. ${SELF_NOTE}`,
+      screen: `The image attached to the user's latest message is a live screenshot of ${source}, taken as they finished speaking. Use it only when their turn is about what's on screen, and then describe only what you can actually see in it. Otherwise don't mention it. ${SELF_NOTE}`,
       screenImage: { mediaType: frame.mimeType, data: frame.data.toString('base64') }
     }
   }
