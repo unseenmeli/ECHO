@@ -86,9 +86,9 @@ export function Companion() {
         <span className="controls-divider" aria-hidden="true" />
         <button
           className="glass-button"
-          aria-label="Go deeper"
-          title="Go deeper"
-          onClick={() => window.companion.next()}
+          aria-label="Minimize to tray"
+          title="Minimize to tray"
+          onClick={() => window.companion.hide()}
         >
           <svg className="glyph-chevron" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M9 5l7 7-7 7" />

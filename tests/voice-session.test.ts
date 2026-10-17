@@ -671,7 +671,7 @@ describe('screen context', () => {
     const tts = b.ttss.at(-1)!
     vi.advanceTimersByTime(1000)
     expect(tts.spoken).toEqual([])
-    vi.advanceTimersByTime(600)
+    vi.advanceTimersByTime(1100)
     expect(WAIT_LINES.screen).toContain(tts.spoken[0]?.trim())
     expect(tts.flushes).toBe(1)
     vi.advanceTimersByTime(2000)
@@ -713,7 +713,7 @@ describe('screen context', () => {
     b.chat.next(never())
     b.chat.next(reply('That is a for loop.'))
     await ask(b, 'Can you look at')
-    vi.advanceTimersByTime(1600) // nothing came back, so the wait line plays
+    vi.advanceTimersByTime(2100) // nothing came back, so the wait line plays
     b.ttss.at(-1)!.audio('r1')
     b.session.onPlayback({ kind: 'started', responseId: 'r1', at: 1 })
 

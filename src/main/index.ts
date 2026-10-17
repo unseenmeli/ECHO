@@ -141,12 +141,11 @@ ipcMain.on('companion:open-lesson', (event) => {
   if (companion && event.sender === companion.webContents) openLessonWindow()
 })
 
-// Button actions. "?" starts/ends the voice conversation (see ./voice). ">" is
-// "go deeper": a deep-dive lesson on what was just discussed, or just the
-// whiteboard if nothing has been discussed yet.
-ipcMain.on('companion:next', (event) => {
+// Button actions. "?" starts/ends the voice conversation (see ./voice). ">" minimizes ECHO to the tray; the tray
+// menu (or its icon) brings it back. A deep dive is asked for by voice.
+ipcMain.on('companion:hide', (event) => {
   if (!companion || event.sender !== companion.webContents) return
-  if (!voiceHost.deepDive()) openLessonWindow()
+  companion.hide()
 })
 
 // Window dragging. While the pointer is held, the window follows the OS cursor

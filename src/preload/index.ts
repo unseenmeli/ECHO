@@ -15,7 +15,7 @@ function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () 
 // The only surface the React UI gets. Keep privileged Electron APIs out of
 // the renderer; add narrowly scoped methods here as features land.
 const api = {
-  next: (): void => ipcRenderer.send('companion:next'),
+  hide: (): void => ipcRenderer.send('companion:hide'),
   openLesson: (): void => ipcRenderer.send('companion:open-lesson'),
   dragStart: (): void => ipcRenderer.send('companion:drag-start'),
   dragEnd: (): void => ipcRenderer.send('companion:drag-end'),
