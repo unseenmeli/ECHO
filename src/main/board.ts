@@ -49,7 +49,13 @@ export const board: BoardApi = {
   upsertElements: (s) => request('upsertElements', [s]) as ReturnType<BoardApi['upsertElements']>,
   updateElements: (p) => request('updateElements', [p]) as ReturnType<BoardApi['updateElements']>,
   deleteElements: (ids) => request('deleteElements', [ids]) as ReturnType<BoardApi['deleteElements']>,
-  clear: () => request('clear', []) as ReturnType<BoardApi['clear']>
+  clear: () => request('clear', []) as ReturnType<BoardApi['clear']>,
+  applyBatch: (b) => request('applyBatch', [b]) as ReturnType<BoardApi['applyBatch']>
+}
+
+/** True while a lesson window is open to draw on. */
+export function isBoardOpen(): boolean {
+  return !!host && !host.isDestroyed()
 }
 
 export function registerBoardIpc(): void {

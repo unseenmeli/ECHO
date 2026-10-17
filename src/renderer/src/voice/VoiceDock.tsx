@@ -70,7 +70,7 @@ const Line = memo(function Line({ entry }: { entry: TranscriptEntry }) {
 })
 
 export function VoiceDock() {
-  const { snapshot, entries } = useVoice()
+  const { snapshot, entries, lesson } = useVoice()
   const log = useRef<HTMLDivElement>(null)
   const { state, muted, pushToTalk, talking, message } = snapshot
   const active = state !== 'idle' && state !== 'error'
@@ -98,6 +98,12 @@ export function VoiceDock() {
             <Line key={e.id} entry={e} />
           ))}
           {message && <p className="vd-line vd-message">{message}</p>}
+        </div>
+      )}
+
+      {lesson && (
+        <div className={`vd-lesson is-${lesson.level}`} role="status" aria-live="polite">
+          {lesson.message}
         </div>
       )}
 

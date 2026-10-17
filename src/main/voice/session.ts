@@ -1,8 +1,13 @@
 import type { VoiceConfig } from './config'
+import { LessonState, LessonTurn, type LessonBoardPort, type TurnIO } from '../lesson/controller'
+import { describeBoardForTutor, summarizeBoard, summarizeSelection } from '../lesson/summary'
+import { LESSON_PROMPT_ADDENDUM, SegmentStreamParser } from '../lesson/tutorProtocol'
 import { PhraseChunker, type Phrase } from './chunker'
 import { buildSystemPrompt } from './claude'
 import { EchoGuard } from './echoGuard'
 import { ConversationHistory } from './history'
+import { classifyIntent, isNoise } from './intent'
+import type { ChatMessage } from './history'
 import { asksAboutScreen, classifyIntent, isNoise, pickFiller } from './intent'
 import {
   ChatError,
@@ -35,6 +40,13 @@ const MAX_ENTRIES = 60
 /** How long to wait for the engine's playback position after an interruption. */
 const PARTIAL_WAIT_MS = 400
 
+/** What the session needs to run a lesson with whiteboard visuals alongside the speech. */
+export interface LessonSupport {
+  /** True while a lesson window is open and visuals are enabled. */
+  available(): boolean
+  board(): LessonBoardPort | null
+}
+
 export interface SessionDeps {
   config: VoiceConfig
   engine: EnginePort
@@ -44,6 +56,7 @@ export interface SessionDeps {
   emit(event: VoiceEvent): void
   now?(): number
   contextProvider?: VoiceContextProvider
+  lesson?: LessonSupport
   log?(message: string): void
 }
 
@@ -54,6 +67,8 @@ interface Segment {
 
 interface Reply {
   id: string
+  /** Set when this reply runs as a visual lesson (segments + whiteboard). */
+  lessonTurn: LessonTurn | null
   abort: AbortController
   chunker: PhraseChunker
   fullText: string
@@ -108,6 +123,7 @@ export class VoiceSession {
   private reply: Reply | null = null
   private lastEndedTurn = -1
   private replySeq = 0
+  private lessonState = new LessonState()
   private entrySeq = 0
   private lastFiller: string | null = null
 
@@ -156,6 +172,7 @@ export class VoiceSession {
     this.message = null
     this.history.clear()
     this.echo.reset()
+    this.lessonState = new LessonState()
     this.entries = []
     this.turn = null
     this.reply = null
@@ -282,6 +299,10 @@ export class VoiceSession {
         r.tFirstPlayed = report.at
         this.emitMetrics(r)
         this.refresh()
+        return
+      case 'segmentStart':
+        if (r?.id !== report.responseId) return
+        r.lessonTurn?.onSegmentStart(report.segment, report.at)
         return
       case 'segment':
         if (r?.id !== report.responseId) return
@@ -440,6 +461,7 @@ export class VoiceSession {
     const epoch = this.epoch
     const reply: Reply = {
       id: `r${++this.replySeq}`,
+      lessonTurn: null,
       abort: new AbortController(),
       chunker: new PhraseChunker(),
       fullText: '',
@@ -466,7 +488,91 @@ export class VoiceSession {
     void this.runChat(reply, epoch)
   }
 
+  private async runLessonChat(reply: Reply, epoch: number): Promise<void> {
+    const support = this.deps.lesson!
+    const alive = (): boolean => epoch === this.epoch && this.reply === reply && !reply.abort.signal.aborted
+    const board = support.board()
+    const io: TurnIO = {
+      signal: reply.abort.signal,
+      alive,
+      speakSentence: (text, force) => {
+        this.speakPhrase(reply, { text, flush: false })
+        return this.flushSegment(reply, force)
+      },
+      finishSpeaking: () => {
+        if (alive()) this.endClaude(reply)
+      },
+      status: (status) => this.deps.emit({ type: 'lesson-status', status }),
+      metrics: (metrics) => {
+        if (this.deps.config.logMetrics) this.log(`[lesson] metrics ${JSON.stringify(metrics)}`)
+        this.deps.emit({ type: 'lesson-metrics', metrics })
+      },
+      log: (m) => this.log(m),
+      now: () => this.now()
+    }
+    const messages = this.history.toMessages(this.deps.config.historyMessages)
+    const question = messages.length && messages[messages.length - 1].role === 'user' ? messages[messages.length - 1].content : ''
+    const turn = new LessonTurn({
+      io,
+      board,
+      lesson: this.lessonState,
+      question,
+      dialogue: messages.slice(0, -1)
+    })
+    reply.lessonTurn = turn
+    const parser = new SegmentStreamParser()
+    try {
+      const withContext = await this.withLessonContext(messages, board)
+      if (!alive()) return
+      await this.deps.chat.stream({
+        system: buildSystemPrompt(null) + '\n' + LESSON_PROMPT_ADDENDUM,
+        maxTokens: Math.max(this.deps.config.claudeMaxTokens, 2400),
+        messages: withContext,
+        signal: reply.abort.signal,
+        onText: (delta) => {
+          if (!alive()) return
+          if (reply.tFirstText === undefined) reply.tFirstText = this.now()
+          for (const seg of parser.push(delta)) turn.onTutorSegment(seg)
+        }
+      })
+    } catch (err) {
+      if (!alive()) return
+      const kind = err instanceof ChatError ? err.kind : 'other'
+      const message = err instanceof ChatError ? err.message : 'Claude request failed.'
+      this.log(`[voice] chat error (${kind})`)
+      if (kind === 'auth') {
+        this.fail(message)
+        return
+      }
+      this.abandonReply(reply, message)
+      return
+    }
+    if (!alive()) return
+    for (const seg of parser.end()) turn.onTutorSegment(seg)
+    turn.onTutorDone()
+  }
+
+  /** The tutor only knows about the board through this: what is drawn, what the user selected, lesson progress. */
+  private async withLessonContext(messages: ChatMessage[], board: LessonBoardPort | null): Promise<ChatMessage[]> {
+    const parts: string[] = []
+    if (board) {
+      try {
+        const scene = await timeout(board.getScene(), 1500)
+        const selected = await timeout(board.getSelected(), 800).catch(() => [])
+        parts.push(`Whiteboard now:\n${describeBoardForTutor(summarizeBoard(scene.elements, scene.viewport), summarizeSelection(selected))}`)
+      } catch {
+        // No board access this turn: the tutor simply isn't told anything about it.
+      }
+    }
+    const state = this.lessonState.describeForTutor()
+    if (state) parts.push(state)
+    const last = messages[messages.length - 1]
+    if (!parts.length || !last || last.role !== 'user') return messages
+    return [...messages.slice(0, -1), { ...last, content: `${last.content}\n\n<lesson_context>\n${parts.join('\n\n')}\n</lesson_context>` }]
+  }
+
   private async runChat(reply: Reply, epoch: number): Promise<void> {
+    if (this.deps.lesson?.available()) return this.runLessonChat(reply, epoch)
     const alive = (): boolean => epoch === this.epoch && this.reply === reply && !reply.abort.signal.aborted
     try {
       const context = (await this.deps.contextProvider?.getContext().catch(() => null)) ?? null
@@ -522,13 +628,15 @@ export class VoiceSession {
     if (phrase.flush) this.flushSegment(reply, false)
   }
 
-  private flushSegment(reply: Reply, force: boolean): void {
-    if (!reply.sinceFlush || !this.tts) return
+  /** Returns the audio segment index that was flushed, or null when nothing was (empty, or out of flush budget). */
+  private flushSegment(reply: Reply, force: boolean): number | null {
+    if (!reply.sinceFlush || !this.tts) return null
     // Deepgram allows only ~20 flushes a minute: hold text for a bigger group when out of budget.
-    if (!force && !this.tts.canFlush()) return
+    if (!force && !this.tts.canFlush()) return null
     const index = this.tts.flush()
     reply.segments[index] = { end: reply.fullText.length }
     reply.sinceFlush = ''
+    return index
   }
 
   private maybeResponseDone(reply: Reply): void {
@@ -600,6 +708,7 @@ export class VoiceSession {
   private finishReply(r: Reply, interrupted: boolean): void {
     if (this.reply !== r) return
     this.reply = null
+    if (!interrupted) r.lessonTurn?.onComplete()
     let delivered: string
     if (interrupted) {
       // Wait briefly for the engine to say how far into the current segment playback got.
@@ -774,5 +883,14 @@ export class VoiceSession {
     this.deps.emit({ type: 'metrics', metrics: m })
   }
 }
+
+const timeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timed out')), ms)
+    p.then(
+      (v) => (clearTimeout(t), resolve(v)),
+      (e) => (clearTimeout(t), reject(e))
+    )
+  })
 
 export { IDLE_SNAPSHOT }

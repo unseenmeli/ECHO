@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, session as electronSession, systemPreferences } from 'electron'
+import { board, isBoardOpen } from '../board'
 import { ClaudeChat } from './claude'
 import { loadEnvFiles, readVoiceConfig } from './config'
 import { DeepgramTts } from './tts'
@@ -48,6 +49,8 @@ class VoiceHost {
   register(options: { canCaptureScreen?(wc: Electron.WebContents): boolean } = {}): void {
     if (options.canCaptureScreen) this.canCaptureScreen = options.canCaptureScreen
     this.setupPermissions()
+    // Test/diagnostic hook, never on by default: lets the e2e harness read the live whiteboard.
+    if (!app.isPackaged && process.env.ECHO_DEBUG_HOOKS === '1') (globalThis as Record<string, unknown>).__echoBoard = board
 
     ipcMain.on('voice:command', (event, raw: unknown) => {
       if (this.isEngine(event.sender)) return
@@ -173,6 +176,10 @@ class VoiceHost {
       createStt: (hooks) => new FluxClient(cfg, hooks),
       createTts: (hooks) => new DeepgramTts(cfg, hooks),
       chat,
+      lesson: {
+        available: () => cfg.visualsEnabled && isBoardOpen(),
+        board: () => (isBoardOpen() ? board : null),
+      },
       contextProvider: screenVoiceContext,
       emit: (e) => this.broadcast(e),
       log: (m) => console.log(m)

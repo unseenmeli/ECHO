@@ -21,7 +21,8 @@
     "@ricky0123/vad-web": "^0.0.31",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "ws": "^8.22.0"
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

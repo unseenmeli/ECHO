@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { IDLE_SNAPSHOT, type TranscriptEntry, type VoiceSnapshot } from '../../../shared/voice'
+import { IDLE_SNAPSHOT, type LessonStatus, type TranscriptEntry, type VoiceSnapshot } from '../../../shared/voice'
 
 export interface VoiceView {
   snapshot: VoiceSnapshot
   entries: TranscriptEntry[]
+  /** Subtle whiteboard status ("Preparing the drawing…"), or null. */
+  lesson: LessonStatus | null
 }
 
 /**
@@ -13,6 +15,7 @@ export interface VoiceView {
 export function useVoice(): VoiceView {
   const [snapshot, setSnapshot] = useState<VoiceSnapshot>(IDLE_SNAPSHOT)
   const [entries, setEntries] = useState<TranscriptEntry[]>([])
+  const [lesson, setLesson] = useState<LessonStatus | null>(null)
 
   useEffect(() => {
     let live = true
@@ -24,6 +27,12 @@ export function useVoice(): VoiceView {
           return
         case 'reset':
           setEntries([])
+          setLesson(null)
+          return
+        case 'lesson-status':
+          setLesson(event.status.message ? event.status : null)
+          return
+        case 'lesson-metrics':
           return
         case 'entry': {
           const incoming = event.entry
@@ -53,5 +62,5 @@ export function useVoice(): VoiceView {
     }
   }, [])
 
-  return { snapshot, entries }
+  return { snapshot, entries, lesson }
 }

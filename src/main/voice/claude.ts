@@ -86,7 +86,7 @@ export class ClaudeChat implements ChatPort {
   async stream(req: ChatRequest): Promise<void> {
     const params = {
       model: this.cfg.claudeModel,
-      max_tokens: this.cfg.claudeMaxTokens,
+      max_tokens: req.maxTokens ?? this.cfg.claudeMaxTokens,
       system: req.system,
       messages: withImage(req.messages, req.image),
       ...(this.cfg.claudeDisableThinking ? { thinking: { type: 'disabled' as const } } : {})

@@ -58,6 +58,8 @@ export interface ScreenImage {
 
 export interface ChatRequest {
   system: string
+  /** Overrides the configured reply budget (lesson replies carry segment markup). */
+  maxTokens?: number
   messages: ChatMessage[]
   /** Screenshot for this turn only; attached to the latest user message, never stored in history. */
   image?: ScreenImage
