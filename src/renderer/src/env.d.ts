@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import type { CompanionApi } from '../../preload'
+import type { DraftApi } from '../../preload/draft'
 import type { TutorApi } from '../../preload/tutor'
 import type { PreferencesApi } from '../../preload/preferencesBridge'
 import type { VoiceApi } from '../../preload/voiceBridge'
@@ -12,5 +13,6 @@ declare global {
     voice: VoiceApi
     preferences: PreferencesApi
     voiceEngine: VoiceEngineApi
+    draft: DraftApi
   }
 }

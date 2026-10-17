@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { EFFORTS, type Effort } from './ports'
 import { parseQualityRoutes, type QualityRoute } from './routing'
+import { DESTINATION_IDS, isDestination, type DestinationId } from '../../shared/compose'
 
 // Everything tunable lives here and is read from the environment, so models,
 // voice and turn-detection can change without touching code. Credentials are
@@ -79,6 +80,8 @@ export interface VoiceConfig {
   webFetchMaxTokens: number
   /** Offer Anthropic's hosted code execution (on Anthropic's servers) for checking calculations and examples. */
   codeExecutionEnabled: boolean
+  /** Where ECHO may open drafted emails and posts (empty: drafting is off). */
+  composeDestinations: DestinationId[]
 }
 
 const num = (v: string | undefined, fallback: number, min: number, max: number): number => {
@@ -90,6 +93,14 @@ const num = (v: string | undefined, fallback: number, min: number, max: number):
 const effort = (v: string | undefined, fallback: Effort): Effort => {
   const e = v?.trim().toLowerCase()
   return (EFFORTS as readonly string[]).includes(e ?? '') ? (e as Effort) : fallback
+}
+
+/** "gmail,x" → those destinations, in order; "none" → none; unset → all. */
+export function parseDestinations(v: string | undefined): DestinationId[] {
+  const raw = v?.trim().toLowerCase()
+  if (!raw) return [...DESTINATION_IDS]
+  if (raw === 'none' || raw === 'off') return []
+  return [...new Set(raw.split(/[\s,]+/).filter(isDestination))]
 }
 
 const bool = (v: string | undefined, fallback: boolean): boolean => {
@@ -165,6 +176,7 @@ export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigRes
       webFetchDeepMaxUses: num(env.ECHO_WEB_FETCH_DEEP_MAX_USES, 3, 1, 10),
       webFetchMaxTokens: num(env.ECHO_WEB_FETCH_MAX_TOKENS, 8000, 1000, 50000),
       codeExecutionEnabled: bool(env.ECHO_CODE_EXECUTION, true),
+      composeDestinations: parseDestinations(env.ECHO_COMPOSE_DESTINATIONS),
     }
   }
 }

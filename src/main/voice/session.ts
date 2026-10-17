@@ -28,6 +28,7 @@ import {
   type ChatPort,
   type ChatRequest,
   type ChatResult,
+  type ChatTool,
   type EnginePort,
   type LinkStatus,
   type SttHooks,
@@ -45,6 +46,8 @@ import type { PreferenceStorePort } from '../memory/preferenceStore'
 import { STUDY_MATERIAL_GUIDE, type StudyMaterialPort } from '../study/studyMaterial'
 import type { Picture, PictureLookup } from '../lesson/pictures'
 import { PREFERENCE_TOOL_GUIDE, PREFERENCE_TOOLS, PreferenceTools } from '../memory/preferenceTools'
+import { composeGuide, composeTools, ComposeTools, type ComposePort } from '../compose/composeTools'
+import type { DraftEdits } from '../../shared/compose'
 import {
   IDLE_SNAPSHOT,
   type EngineError,
@@ -116,6 +119,8 @@ export interface SessionDeps {
   preferences?: PreferenceStorePort
   /** The learner's own study material, searched for passages related to each question. */
   study?: StudyMaterialPort
+  /** Emails and posts ECHO drafts for the user to approve; the app opens the compose page on their yes. */
+  compose?: ComposePort
   log?(message: string): void
 }
 
@@ -218,6 +223,7 @@ export class VoiceSession {
   /** The tier that answered the last turn, so a short follow-up stays on it. */
   private lastTier: ModelTier = 'fast'
   private readonly prefTools: PreferenceTools | null
+  private readonly compose: ComposeTools | null
   /** The voice the current speech socket was opened with, to notice a changed preference. */
   private ttsVoice: string | undefined
   /** A web search or page read is running, so the status line says so. */
@@ -236,6 +242,7 @@ export class VoiceSession {
 
   constructor(private readonly deps: SessionDeps) {
     this.prefTools = deps.preferences ? new PreferenceTools(deps.preferences) : null
+    this.compose = deps.compose?.destinations.length ? new ComposeTools(deps.compose) : null
   }
 
   private now(): number {
@@ -276,6 +283,7 @@ export class VoiceSession {
     this.echo.reset()
     this.lessonState = new LessonState()
     this.prefTools?.reset()
+    this.compose?.reset()
     this.practiceTurnsLeft = 0
     this.lastTier = 'fast'
     this.entries = []
@@ -374,6 +382,21 @@ export class VoiceSession {
     this.updateTurnEntry({ index: -1, text: DEEP_DIVE_REQUEST, suspect: false, entryId: null }, true)
     this.submit(DEEP_DIVE_REQUEST, { forceDeep: true })
     return true
+  }
+
+  /** Send or Cancel pressed on the draft card. ECHO says what happened. */
+  answerDraft(id: string, send: boolean): void {
+    const answer = this.compose?.answer(id, send)
+    if (!answer || !this.active) return
+    this.log(`[voice] draft ${answer.kind} (button)`)
+    if (this.reply) this.interrupt('draft-button')
+    this.flushPendingStop()
+    this.startReply('', { localText: answer.spoken })
+  }
+
+  /** The user edited the draft in the card. */
+  editDraft(id: string, edits: DraftEdits): void {
+    this.compose?.edit(id, edits)
   }
 
   // --- Events from the audio engine -----------------------------------------------
@@ -574,7 +597,8 @@ export class VoiceSession {
     }
     if (this.reply) this.interrupt('new-turn')
     // If ECHO just asked whether to remember something, a short yes/no settles it without another model call.
-    const answer = this.prefTools?.resolveProposal(text)
+    const answer = this.prefTools?.resolveProposal(text) ?? this.compose?.resolveSpoken(text)
+    if (answer?.kind === 'sent' || answer?.kind === 'cancelled') this.log(`[voice] draft ${answer.kind} (spoken)`)
     const unsure = unsureWords(info.words, this.deps.config.sttUnsureConfidence)
     if (unsure.length) this.log(`[voice] speech recognition unsure of: ${unsure.join(', ')}`)
     this.submit(text, answer ? { localText: answer.spoken } : { unsure })
@@ -721,6 +745,11 @@ export class VoiceSession {
 
   /** Preference and other tool calls the model made while answering. */
   private onToolUse(reply: Reply, call: ToolCall): string | undefined {
+    if (call.name === 'draft_message' && this.compose) {
+      const note = this.compose.handle(call)
+      this.log(`[voice] draft_message: ${note.split(':')[0].split('.')[0]}`)
+      return note
+    }
     const outcome = this.prefTools?.handle(call, reply.question)
     if (outcome) this.log(`[voice] ${outcome.tool}: ${outcome.note}`)
     return outcome?.note
@@ -816,8 +845,14 @@ export class VoiceSession {
       })
   }
 
-  private toolsForRequest(): { tools?: typeof PREFERENCE_TOOLS } {
-    return this.prefTools ? { tools: PREFERENCE_TOOLS } : {}
+  /** Always the same tools in the same order for a session, so the tool list stays in the cached prefix. */
+  private toolsForRequest(): { tools?: ChatTool[] } {
+    const tools = [...(this.prefTools ? PREFERENCE_TOOLS : []), ...(this.compose ? composeTools(this.deps.compose!.destinations) : [])]
+    return tools.length ? { tools } : {}
+  }
+
+  private composeGuide(): string | null {
+    return this.compose ? composeGuide(this.deps.compose!.destinations) : null
   }
 
   /**
@@ -913,13 +948,13 @@ export class VoiceSession {
       const prefs = this.preferenceParts()
       const study = this.studyParts(reply)
       await this.deps.chat.stream({
-        system: buildSystemPrompt(prefs.guide, LESSON_PROMPT_ADDENDUM, this.skillsFor(reply, true), research.guide, study.guide),
+        system: buildSystemPrompt(prefs.guide, this.composeGuide(), LESSON_PROMPT_ADDENDUM, this.skillsFor(reply, true), research.guide, study.guide),
         systemTail: prefs.tail,
         // The whiteboard reaches the tutor through <lesson_context>, the screen through <screen_context>.
         turnContext: buildTurnContext(
           context,
           reply.filler,
-          [lessonContext, study.context, this.pictureNote(reply, true), this.repairNotes(reply, !!context?.screenImage, true)].filter(Boolean).join('\n\n') || null
+          [lessonContext, study.context, this.compose?.turnNote(), this.pictureNote(reply, true), this.repairNotes(reply, !!context?.screenImage, true)].filter(Boolean).join('\n\n') || null
         ),
         maxTokens: Math.max(this.deps.config.claudeMaxTokens, reply.deep ? DEEP_MAX_TOKENS : LESSON_MAX_TOKENS),
         deep: reply.deep,
@@ -1083,12 +1118,12 @@ The learner asked to see a picture of "${p.subject}", but ${why}. Say so plainly
       const prefs = this.preferenceParts()
       const study = this.studyParts(reply)
       await this.deps.chat.stream({
-        system: buildSystemPrompt(prefs.guide, this.skillsFor(reply, false), research.guide, study.guide),
+        system: buildSystemPrompt(prefs.guide, this.composeGuide(), this.skillsFor(reply, false), research.guide, study.guide),
         systemTail: prefs.tail,
         turnContext: buildTurnContext(
           context,
           reply.filler,
-          [study.context, this.pictureNote(reply, false), this.repairNotes(reply, !!context?.screenImage, false)].filter(Boolean).join('\n\n') || null
+          [study.context, this.compose?.turnNote(), this.pictureNote(reply, false), this.repairNotes(reply, !!context?.screenImage, false)].filter(Boolean).join('\n\n') || null
         ),
         ...(reply.deep ? { maxTokens: Math.max(this.deps.config.claudeMaxTokens, DEEP_VERBAL_MAX_TOKENS), deep: true } : { tier: reply.tier }),
         ...this.reasoningFor(reply, false),
@@ -1342,6 +1377,7 @@ The learner asked to see a picture of "${p.subject}", but ${why}. Say so plainly
   private teardown(): void {
     this.epoch += 1 // invalidates every callback still in flight
     this.active = false
+    this.compose?.reset()
     this.summarizing?.abort()
     this.summarizing = null
     this.searching = false
