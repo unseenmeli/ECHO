@@ -11,6 +11,7 @@ import { PreferenceStore } from './memory/preferenceStore'
 import { STUDY_EXTENSIONS, StudyMaterial } from './study/studyMaterial'
 import { openPreferencesWindow, preferencesWindow } from './preferencesWindow'
 import { registerDraftIpc } from './compose/draftWindow'
+import { AccessCodeStore, registerAccessIpc } from './accessCode'
 
 const COMPANION_WIDTH = 150
 // Tall enough for the "Watching" pill above the character.
@@ -236,6 +237,9 @@ if (!app.requestSingleInstanceLock()) {
     registerPreferenceIpc(preferences, () =>
       [companion, lesson, preferencesWindow()].filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
     )
+    // The judge access code for ECHO's server (when the app was built or started with one).
+    const access = new AccessCodeStore(join(app.getPath('userData'), 'access-code.json'))
+    registerAccessIpc(access, () => [preferencesWindow()].filter((w): w is BrowserWindow => !!w && !w.isDestroyed()))
     // The learner's own study material: which files they added, re-read on launch.
     const study = new StudyMaterial(join(app.getPath('userData'), 'study-material.json'))
     void study.load()
@@ -249,7 +253,8 @@ if (!app.requestSingleInstanceLock()) {
         if (lesson && !lesson.isDestroyed()) lesson.close()
       },
       preferences,
-      study
+      study,
+      access
     })
     companion = createCompanionWindow()
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { AccessSection } from './AccessSection'
 import type { PreferenceRow, PreferencesView } from '../../../shared/preferences'
 
 const NOT_SET = ''
@@ -111,6 +112,8 @@ export function PreferencesWindow() {
           be less formal”, or set them here. They stay on this computer, and ECHO never keeps a record of what you say.
         </p>
       </header>
+
+      <AccessSection />
 
       {view && (
         <>

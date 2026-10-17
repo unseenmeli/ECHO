@@ -3,12 +3,18 @@ import { join } from 'node:path'
 import { EFFORTS, type Effort } from './ports'
 import { parseQualityRoutes, type QualityRoute } from './routing'
 import { DESTINATION_IDS, isDestination, type DestinationId } from '../../shared/compose'
+import type { BackendConfig } from './backend'
 
 // Everything tunable lives here and is read from the environment, so models,
 // voice and turn-detection can change without touching code. Credentials are
 // only ever read in the main process and are never logged or sent to a window.
 
 export interface VoiceConfig {
+  /**
+   * ECHO's server. When set, Claude requests go through it and Deepgram sockets use short-lived tokens from it, so
+   * the app holds no provider keys (anthropicApiKey and deepgramApiKey are then empty).
+   */
+  backend: BackendConfig | null
   anthropicApiKey: string
   /** Needed only when the API key is not scoped to a single workspace. */
   anthropicWorkspaceId: string | null
@@ -124,16 +130,39 @@ export function loadEnvFiles(dirs: string[]): void {
 
 export type ConfigResult = { ok: true; config: VoiceConfig } | { ok: false; message: string }
 
-export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigResult {
-  const anthropicApiKey = (env.ANTHROPIC_API_KEY ?? '').trim()
-  const deepgramApiKey = (env.DEEPGRAM_API_KEY ?? '').trim()
+/** Where to find the server's address and the access code, when the app runs against ECHO's server. */
+export const ACCESS_CODE_MISSING = "Enter your access code: click ECHO's menu-bar icon → Preferences…, then start the conversation again."
 
-  const missing = [
-    !anthropicApiKey && 'ANTHROPIC_API_KEY',
-    !deepgramApiKey && 'DEEPGRAM_API_KEY'
-  ].filter(Boolean)
-  if (missing.length) {
-    return { ok: false, message: `Missing ${missing.join(' and ')} in .env — add your key(s) and restart ECHO.` }
+/** https anywhere; plain http only for a server on this computer (`vercel dev`). */
+export function parseBackendUrl(raw: string | undefined): string | null | 'invalid' {
+  const v = raw?.trim().replace(/\/+$/, '')
+  if (!v) return null
+  try {
+    const u = new URL(v)
+    if (u.protocol === 'https:' || (u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname))) return v
+  } catch {
+    // fall through
+  }
+  return 'invalid'
+}
+
+export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigResult {
+  const backendUrl = parseBackendUrl(env.ECHO_BACKEND_URL)
+  if (backendUrl === 'invalid') return { ok: false, message: 'ECHO_BACKEND_URL must be an https:// address.' }
+  let backend: BackendConfig | null = null
+  let anthropicApiKey = ''
+  let deepgramApiKey = ''
+  if (backendUrl) {
+    const accessCode = (env.ECHO_ACCESS_CODE ?? '').trim()
+    if (!accessCode) return { ok: false, message: ACCESS_CODE_MISSING }
+    backend = { url: backendUrl, accessCode }
+  } else {
+    anthropicApiKey = (env.ANTHROPIC_API_KEY ?? '').trim()
+    deepgramApiKey = (env.DEEPGRAM_API_KEY ?? '').trim()
+    const missing = [!anthropicApiKey && 'ANTHROPIC_API_KEY', !deepgramApiKey && 'DEEPGRAM_API_KEY'].filter(Boolean)
+    if (missing.length) {
+      return { ok: false, message: `Missing ${missing.join(' and ')} in .env — add your key(s), or set ECHO_BACKEND_URL, and restart ECHO.` }
+    }
   }
 
   const eager = env.ECHO_EAGER_EOT_THRESHOLD?.trim()
@@ -141,6 +170,7 @@ export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigRes
   return {
     ok: true,
     config: {
+      backend,
       anthropicApiKey,
       anthropicWorkspaceId: env.ANTHROPIC_WORKSPACE_ID?.trim() || null,
       deepgramApiKey,
