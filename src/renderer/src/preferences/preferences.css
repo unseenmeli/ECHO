@@ -147,3 +147,65 @@ button {
   opacity: 0.45;
   cursor: default;
 }
+
+.access {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.access h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.access p {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.access-form {
+  display: flex;
+  gap: 8px;
+}
+
+.access-form input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.access-form input:focus-visible,
+.access-form button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.access-form button {
+  font: inherit;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.access-form button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.access .access-result {
+  margin: 8px 0 0;
+  color: var(--ink);
+}
+
+.access .access-result.is-error {
+  color: var(--danger);
+}

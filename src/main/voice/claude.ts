@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { VoiceConfig } from './config'
 import type { ChatMessage } from './history'
+import { ACCESS_CODE_REJECTED } from './backend'
 import { ChatError, type ChatPort, type ChatRequest, type ChatResult, type ScreenImage, type VoiceContext } from './ports'
 
 export const TUTOR_SYSTEM_PROMPT = `You are ECHO, a voice tutor. You teach through spoken conversation and, when the lesson window is open, a shared whiteboard. Your goal is for the learner to understand the subject well enough to explain it in their own words and apply it to an example.
@@ -94,7 +95,14 @@ export function withImage(messages: ChatMessage[], image?: ScreenImage): Anthrop
 
 type ServerTool = 'web_search' | 'web_fetch' | 'code_execution'
 
-function classify(err: unknown): ChatError {
+/** The message the ECHO server put in its error body (for its own limits), if any. */
+function serverMessage(err: InstanceType<typeof Anthropic.APIError>): string | null {
+  const m = (err.error as { error?: { message?: unknown } } | undefined)?.error?.message
+  return typeof m === 'string' ? m : null
+}
+
+/** @param viaServer Requests go through ECHO's server, which answers for itself on auth and limits. */
+function classify(err: unknown, viaServer = false): ChatError {
   // A key that works but may not use a server tool (not enabled for the organization) is not a bad key.
   if (
     (err instanceof Anthropic.BadRequestError || err instanceof Anthropic.PermissionDeniedError) &&
@@ -104,13 +112,13 @@ function classify(err: unknown): ChatError {
     return new ChatError('tool-unavailable', tool)
   }
   if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
-    return new ChatError('auth', 'Anthropic rejected the API key (check ANTHROPIC_API_KEY).')
+    return new ChatError('auth', viaServer ? ACCESS_CODE_REJECTED : 'Anthropic rejected the API key (check ANTHROPIC_API_KEY).')
   }
   if (err instanceof Anthropic.RateLimitError) {
-    return new ChatError('rate-limit', 'Claude is rate limited right now. Try again in a moment.')
+    return new ChatError('rate-limit', (viaServer && serverMessage(err)) || 'Claude is rate limited right now. Try again in a moment.')
   }
   if (err instanceof Anthropic.APIConnectionError) {
-    return new ChatError('network', 'Could not reach Claude. Check your connection.')
+    return new ChatError('network', viaServer ? 'Could not reach the ECHO server. Check your connection.' : 'Could not reach Claude. Check your connection.')
   }
   if (err instanceof Anthropic.APIError) {
     // err.message is the API's own description of the problem (it never contains the key).
@@ -200,9 +208,14 @@ export class ClaudeChat implements ChatPort {
     this.client =
       client ??
       new Anthropic({
-        apiKey: cfg.anthropicApiKey,
         maxRetries: 1,
-        ...(cfg.anthropicWorkspaceId ? { defaultHeaders: { 'anthropic-workspace-id': cfg.anthropicWorkspaceId } } : {})
+        ...(cfg.backend
+          ? // ECHO's server speaks the Messages API and holds the key; the access code is the bearer token.
+            { baseURL: `${cfg.backend.url}/api/anthropic`, apiKey: null, authToken: cfg.backend.accessCode }
+          : {
+              apiKey: cfg.anthropicApiKey,
+              ...(cfg.anthropicWorkspaceId ? { defaultHeaders: { 'anthropic-workspace-id': cfg.anthropicWorkspaceId } } : {})
+            })
       })
   }
 
@@ -280,7 +293,7 @@ export class ClaudeChat implements ChatPort {
       } catch (err) {
         if (req.signal.aborted) return
         const rejected = err instanceof Anthropic.BadRequestError && /thinking/i.test(err.message)
-        if (!rejected || i === forms.length - 1) throw classify(err)
+        if (!rejected || i === forms.length - 1) throw classify(err, !!this.cfg.backend)
       }
     }
   }
@@ -289,7 +302,7 @@ export class ClaudeChat implements ChatPort {
     try {
       await this.run(params, req)
     } catch (err) {
-      if (!req.signal.aborted) throw classify(err)
+      if (!req.signal.aborted) throw classify(err, !!this.cfg.backend)
     }
   }
 

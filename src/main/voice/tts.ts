@@ -1,5 +1,6 @@
 import WebSocket from 'ws'
 import type { VoiceConfig } from './config'
+import { DeepgramAuthError, keyAuth, type DeepgramAuth } from './backend'
 import type { TtsHooks, TtsPort } from './ports'
 import { TTS_SAMPLE_RATE } from '../../shared/voice'
 
@@ -30,10 +31,14 @@ export class DeepgramTts implements TtsPort {
   private segmentsAcked = 0
   private reconnects = 0
   private closedByUs = false
+  /** Bumped per connection attempt, so a credential that arrives after a newer attempt (or close) is dropped. */
+  private attemptId = 0
 
+  /** @param auth Credentials for each socket: the .env key, or a short-lived token from ECHO's server. */
   constructor(
     private readonly cfg: VoiceConfig,
-    private readonly hooks: TtsHooks
+    private readonly hooks: TtsHooks,
+    private readonly auth: DeepgramAuth = keyAuth(cfg.deepgramApiKey)
   ) {}
 
   private url(): string {
@@ -49,7 +54,23 @@ export class DeepgramTts implements TtsPort {
     this.closedByUs = false
     if (this.open || this.connecting) return
     this.connecting = true
-    const ws = new WebSocket(this.url(), { headers: { Authorization: `Token ${this.cfg.deepgramApiKey}` } })
+    const id = ++this.attemptId
+    this.auth.header().then(
+      (authorization) => {
+        if (id === this.attemptId && this.connecting && !this.closedByUs) this.openWith(authorization)
+      },
+      (err: unknown) => {
+        if (id !== this.attemptId) return
+        this.connecting = false
+        if (this.closedByUs) return
+        const message = err instanceof Error ? err.message : 'Could not get speech credentials.'
+        this.hooks.onError(this.responseId, message, err instanceof DeepgramAuthError && err.fatal)
+      }
+    )
+  }
+
+  private openWith(authorization: string): void {
+    const ws = new WebSocket(this.url(), { headers: { Authorization: authorization } })
     this.ws = ws
 
     ws.on('open', () => {
@@ -77,7 +98,7 @@ export class DeepgramTts implements TtsPort {
       this.dropSocket()
       const msg =
         status === 401 || status === 403
-          ? 'Deepgram rejected the API key (check DEEPGRAM_API_KEY).'
+          ? this.auth.rejectedMessage
           : status === 429
             ? 'Deepgram speech rate limit reached. Try again in a moment.'
             : `Deepgram speech service returned HTTP ${status}.`
@@ -211,6 +232,7 @@ export class DeepgramTts implements TtsPort {
 
   close(): void {
     this.closedByUs = true
+    this.attemptId += 1
     this.responseId = null
     this.outbox = []
     const ws = this.ws
