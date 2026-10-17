@@ -7,6 +7,7 @@ import type { SavedBoard } from '../../../shared/board'
 import { createBoardController } from './boardController'
 import avatarSrc from '../assets/echo-avatar.png'
 import characterSrc from '../assets/poses/frame-1.png'
+import { VoiceDock } from '../voice/VoiceDock'
 
 const SAVE_DELAY_MS = 250
 const isMac = navigator.platform.startsWith('Mac')
@@ -133,6 +134,7 @@ export function TutorWindow() {
           </Excalidraw>
         )}
       </main>
+      <VoiceDock />
     </div>
   )
 }

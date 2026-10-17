@@ -5,6 +5,7 @@ import { attachBoardHost, registerBoardIpc } from './board'
 import { attachScreenHost, registerScreenIpc, screenContext } from './screenContext'
 import { createTray } from './tray'
 import windowIconPath from '../../resources/icon.png?asset'
+import { voiceHost } from './voice/host'
 
 const COMPANION_WIDTH = 150
 // Tall enough for the "Watching" pill above the character.
@@ -141,6 +142,8 @@ ipcMain.on('companion:ask', () => {
     (err: Error) => console.log(`[companion] ? pressed — no screen context: ${err.message}`)
   )
 })
+// Button actions. "?" starts/ends the voice conversation (see ./voice); ">"
+// is still a stub until the lecture layer exists.
 ipcMain.on('companion:next', () => {
   console.log('[companion] > pressed')
 })
@@ -206,6 +209,7 @@ if (!app.requestSingleInstanceLock()) {
 
     registerBoardIpc()
     registerScreenIpc(() => [companion, lesson].filter((w): w is BrowserWindow => !!w && !w.isDestroyed()))
+    voiceHost.register()
     companion = createCompanionWindow()
 
     createTray({
@@ -222,11 +226,15 @@ if (!app.requestSingleInstanceLock()) {
         stop: screenContext.stop,
         showLatest: showLatestFrame
       }
+      toggleVoice: () => voiceHost.toggle(),
+      isVoiceActive: () => voiceHost.isActive()
     })
 
     app.on('activate', showCompanion)
   })
 }
+
+app.on('before-quit', () => voiceHost.shutdown())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

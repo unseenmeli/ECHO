@@ -394,5 +394,200 @@ body,
 @media (prefers-reduced-motion: reduce) {
   .tutor-cursor {
     animation: none;
+/* --- Voice dock: floats over the bottom centre of the board ------------------- */
+.voice-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 20;
+  width: min(640px, calc(100% - 340px));
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.voice-dock > * {
+  pointer-events: auto;
+}
+
+.vd-panel {
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 12px 16px;
+  border-radius: 18px;
+  background: var(--glass-bg);
+  border: 0.5px solid var(--glass-border);
+  backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  font-size: 14px;
+  line-height: 1.45;
+  user-select: text;
+}
+
+.vd-line {
+  margin: 0 0 6px;
+}
+
+.vd-line:last-child {
+  margin-bottom: 0;
+}
+
+.vd-who {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6f6c64;
+  margin-right: 4px;
+}
+
+.vd-user.is-live {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.vd-pending {
+  opacity: 0.45;
+}
+
+.vd-cut,
+.vd-message {
+  color: #8a6d1d;
+  font-size: 12px;
+}
+
+.vd-bar {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 999px;
+  background: var(--glass-bg);
+  border: 0.5px solid var(--glass-border);
+  backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  font-size: 13px;
+}
+
+.vd-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.vd-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #a8a59d;
+}
+
+.voice-dock[data-state='listening'] .vd-dot,
+.voice-dock[data-state='paused'] .vd-dot {
+  background: #30d158;
+}
+
+.voice-dock[data-state='connecting'] .vd-dot,
+.voice-dock[data-state='thinking'] .vd-dot {
+  background: #ff9f0a;
+  animation: vd-pulse 1s ease-in-out infinite;
+}
+
+.voice-dock[data-state='user-speaking'] .vd-dot {
+  background: #0a84ff;
+  animation: vd-pulse 0.7s ease-in-out infinite;
+}
+
+.voice-dock[data-state='speaking'] .vd-dot {
+  background: #bf5af2;
+  animation: vd-pulse 0.6s ease-in-out infinite;
+}
+
+.voice-dock[data-state='error'] .vd-dot {
+  background: #ff453a;
+}
+
+@keyframes vd-pulse {
+  50% {
+    transform: scale(1.4);
+  }
+}
+
+.vd-sep {
+  width: 1px;
+  height: 18px;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.vd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.vd-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.vd-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.vd-btn:focus-visible {
+  outline: 2px solid #0a84ff;
+  outline-offset: 1px;
+}
+
+.vd-btn.is-on {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.vd-btn.is-warn {
+  background: #ffd9d6;
+  color: #a1160a;
+}
+
+.vd-icon-btn {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
+.vd-icon {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.vd-hold {
+  user-select: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vd-dot {
+    animation: none !important;
   }
 }
