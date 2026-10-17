@@ -5,6 +5,7 @@ import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import '@excalidraw/excalidraw/index.css'
 import type { SavedBoard } from '../../../shared/board'
 import { createBoardController } from './boardController'
+import { VoiceDock } from '../voice/VoiceDock'
 
 const SAVE_DELAY_MS = 250
 const isMac = navigator.platform.startsWith('Mac')
@@ -81,6 +82,7 @@ export function TutorWindow() {
           />
         )}
       </main>
+      <VoiceDock />
     </div>
   )
 }

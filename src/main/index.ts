@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, nativeTheme, screen } from 'electron'
 import { attachBoardHost, registerBoardIpc } from './board'
 import { createTray } from './tray'
+import { voiceHost } from './voice/host'
 
 const COMPANION_WIDTH = 150
 const COMPANION_HEIGHT = 240
@@ -117,11 +118,8 @@ ipcMain.on('companion:open-lesson', (event) => {
   if (companion && event.sender === companion.webContents) openLessonWindow()
 })
 
-// Button actions. Stubs for now — these become "start listening" and
-// "explain deeper / open lecture" once the voice and lecture layers exist.
-ipcMain.on('companion:ask', () => {
-  console.log('[companion] ? pressed')
-})
+// Button actions. "?" starts/ends the voice conversation (see ./voice); ">"
+// is still a stub until the lecture layer exists.
 ipcMain.on('companion:next', () => {
   console.log('[companion] > pressed')
 })
@@ -177,6 +175,7 @@ if (!app.requestSingleInstanceLock()) {
     app.dock?.hide()
 
     registerBoardIpc()
+    voiceHost.register()
     companion = createCompanionWindow()
 
     createTray({
@@ -185,12 +184,16 @@ if (!app.requestSingleInstanceLock()) {
         if (companion && !companion.isDestroyed() && companion.isVisible()) companion.hide()
         else showCompanion()
       },
-      openLesson: openLessonWindow
+      openLesson: openLessonWindow,
+      toggleVoice: () => voiceHost.toggle(),
+      isVoiceActive: () => voiceHost.isActive()
     })
 
     app.on('activate', showCompanion)
   })
 }
+
+app.on('before-quit', () => voiceHost.shutdown())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { VoiceEvent } from '../shared/voice'
+import type { VoiceApi } from './voiceBridge'
 import type { BoardMethod, SavedBoard } from '../shared/board'
 
 type RequestHandler = (method: BoardMethod, args: unknown[]) => Promise<unknown>
@@ -21,5 +23,17 @@ const api = {
 }
 
 contextBridge.exposeInMainWorld('tutor', api)
+// Voice conversation bridge (same surface in every UI window; kept inline because
+// sandboxed preload scripts cannot require shared chunks).
+const voiceApi: VoiceApi = {
+  command: (cmd) => ipcRenderer.send('voice:command', cmd),
+  getState: () => ipcRenderer.invoke('voice:get-state'),
+  onEvent: (cb) => {
+    const listener = (_e: unknown, event: VoiceEvent): void => cb(event)
+    ipcRenderer.on('voice:event', listener)
+    return () => ipcRenderer.removeListener('voice:event', listener)
+  }
+}
+contextBridge.exposeInMainWorld('voice', voiceApi)
 
 export type TutorApi = typeof api

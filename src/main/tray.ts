@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { app, Menu, nativeImage, Tray } from 'electron'
-import macIconPath from '../../resources/trayTemplate@2x.png?asset'
-import winIconPath from '../../resources/tray-win.png?asset'
+import iconPath from '../../resources/trayTemplate@2x.png?asset'
 
 export interface TrayActions {
   isCompanionVisible(): boolean
   toggleCompanion(): void
   openLesson(): void
+  toggleVoice(): void
+  isVoiceActive(): boolean
 }
 
 // Module-level reference: a Tray that gets garbage-collected disappears.
@@ -19,9 +20,9 @@ let tray: Tray | null = null
 export function createTray(actions: TrayActions): void {
   const isMac = process.platform === 'darwin'
 
-  // Both images are drawn at 2x; macOS template images are tinted by the
-  // system to match light/dark menu bars.
-  const icon = nativeImage.createFromBuffer(readFileSync(isMac ? macIconPath : winIconPath), { scaleFactor: 2 })
+  // The white 2x template image is used on every platform; macOS tints it to
+  // match light/dark menu bars.
+  const icon = nativeImage.createFromBuffer(readFileSync(iconPath), { scaleFactor: 2 })
   if (isMac) icon.setTemplateImage(true)
 
   tray = new Tray(icon)
@@ -33,6 +34,7 @@ export function createTray(actions: TrayActions): void {
       Menu.buildFromTemplate([
         { label: actions.isCompanionVisible() ? 'Hide Echo' : 'Show Echo', click: actions.toggleCompanion },
         { label: 'Open Lesson', click: actions.openLesson },
+        { label: actions.isVoiceActive() ? 'End Conversation' : 'Start Conversation', click: actions.toggleVoice },
         { type: 'separator' },
         { label: 'Quit Echo', click: () => app.quit() }
       ])

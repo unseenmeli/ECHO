@@ -1,0 +1,193 @@
+import { describe, expect, it } from 'vitest'
+import { PhraseChunker, sanitizeForSpeech } from '../src/main/voice/chunker'
+import { EchoGuard } from '../src/main/voice/echoGuard'
+import { ConversationHistory } from '../src/main/voice/history'
+import { classifyIntent, isNoise } from '../src/main/voice/intent'
+import { readVoiceConfig } from '../src/main/voice/config'
+import { parseVoiceCommand } from '../src/shared/voice'
+
+describe('PhraseChunker', () => {
+  it('flushes the first sentence immediately and groups later ones', () => {
+    const c = new PhraseChunker()
+    const out = [
+      ...c.push('A variable is a named box that holds a value. '),
+      ...c.push('You can change what is inside it later. '),
+      ...c.push('For example, age can be ten today. '),
+      ...c.push('And eleven next year, which is fine. '),
+      ...c.end()
+    ]
+    expect(out[0]).toEqual({ text: 'A variable is a named box that holds a value.', flush: true })
+    // Later sentences are sent but flushed in groups, not one by one.
+    const flushes = out.filter((p) => p.flush).length
+    expect(flushes).toBeLessThan(out.length)
+    expect(out[out.length - 1].flush).toBe(true)
+    expect(out.map((p) => p.text).join(' ')).toContain('eleven next year')
+  })
+
+  it('never emits single tokens', () => {
+    const c = new PhraseChunker()
+    const emitted: string[] = []
+    for (const tok of ['Hel', 'lo', ' there', ',', ' friend', '. ', 'How', ' are', ' you', '?']) {
+      emitted.push(...c.push(tok).map((p) => p.text))
+    }
+    emitted.push(...c.end().map((p) => p.text))
+    expect(emitted.every((t) => t.length > 5)).toBe(true)
+  })
+
+  it('does not split decimals or abbreviations mid-number', () => {
+    const c = new PhraseChunker()
+    const out = [...c.push('Pi is about 3.14 and that is enough for most things. '), ...c.end()]
+    expect(out[0].text).toContain('3.14')
+  })
+
+  it('splits a long first sentence at a clause break so speech can start early', () => {
+    const c = new PhraseChunker()
+    const out = c.push(
+      'Because the function returns a value every time it is called, you can store that result in a variable and reuse it'
+    )
+    expect(out[0].flush).toBe(true)
+    expect(out[0].text.endsWith(',')).toBe(true)
+  })
+
+  it('strips markdown that sounds wrong when spoken', () => {
+    expect(sanitizeForSpeech('## Title\n- **bold** item with `code` and [a link](http://x.y)')).toBe(
+      'Title bold item with code and a link'
+    )
+  })
+
+  it('emits nothing for an empty response', () => {
+    expect(new PhraseChunker().end()).toEqual([])
+  })
+})
+
+describe('EchoGuard', () => {
+  it("recognizes ECHO's own words but lets command words through", () => {
+    const g = new EchoGuard()
+    g.noteSpoken('A variable stores a value in memory.', 1000)
+    expect(g.isEchoLike('a variable stores a value', 2000, true)).toBe(true)
+    expect(g.isEchoLike('wait', 2000, true)).toBe(false)
+    expect(g.isEchoLike('can you explain how this diagram works', 2000, true)).toBe(false)
+    expect(g.isEchoLike('', 2000, true)).toBe(false)
+  })
+
+  it('forgets old speech once ECHO has been quiet for a while', () => {
+    const g = new EchoGuard()
+    g.noteSpoken('A variable stores a value in memory.', 1000)
+    expect(g.isEchoLike('variable stores value', 60_000, false)).toBe(false)
+  })
+})
+
+describe('intent', () => {
+  it('treats stop-style phrases as local stop commands', () => {
+    for (const t of ['Stop.', 'stop it', 'Okay, stop.', 'be quiet', 'Hold on', 'wait', "That's enough"]) {
+      expect(classifyIntent(t)).toBe('stop')
+    }
+  })
+  it('leaves real requests for Claude', () => {
+    for (const t of ['Wait, explain that more simply.', 'Give me an example.', 'Continue.', 'Stop using jargon please']) {
+      expect(classifyIntent(t)).toBe('other')
+    }
+  })
+  it('detects noise-only transcripts', () => {
+    expect(isNoise('')).toBe(true)
+    expect(isNoise(' ... ')).toBe(true)
+    expect(isNoise('hm')).toBe(false)
+  })
+})
+
+describe('ConversationHistory', () => {
+  it('stores only what was delivered and merges unanswered questions', () => {
+    const h = new ConversationHistory()
+    h.addUser('Can you explain')
+    expect(h.hasUnansweredUser()).toBe(true)
+    h.mergeIntoLastUser('how this works?')
+    expect(h.toMessages(10)).toEqual([{ role: 'user', content: 'Can you explain how this works?' }])
+    h.commitAssistant('It works like this.')
+    expect(h.hasUnansweredUser()).toBe(false)
+    h.addUser('And then?')
+    h.commitAssistant('') // nothing delivered
+    expect(h.hasUnansweredUser()).toBe(true)
+    const msgs = h.toMessages(10)
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+  })
+
+  it('always starts the window on a user turn', () => {
+    const h = new ConversationHistory()
+    h.addUser('one')
+    h.commitAssistant('a')
+    h.addUser('two')
+    h.commitAssistant('b')
+    expect(h.toMessages(3)[0].role).toBe('user')
+  })
+})
+
+describe('readVoiceConfig', () => {
+  it('reports missing credentials without echoing any value', () => {
+    const r = readVoiceConfig({})
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.message).toContain('ANTHROPIC_API_KEY')
+      expect(r.message).toContain('DEEPGRAM_API_KEY')
+    }
+  })
+
+  it('applies defaults and clamps tunables', () => {
+    const r = readVoiceConfig({
+      ANTHROPIC_API_KEY: 'a',
+      DEEPGRAM_API_KEY: 'd',
+      ECHO_EOT_THRESHOLD: '5',
+      ECHO_TTS_VOICE: 'aura-2-helena-en'
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.config.claudeModel).toBe('claude-haiku-5-5')
+      expect(r.config.eotThreshold).toBe(1)
+      expect(r.config.ttsVoice).toBe('aura-2-helena-en')
+      expect(r.config.eagerEotThreshold).toBeNull()
+    }
+  })
+})
+
+describe('parseVoiceCommand', () => {
+  it('accepts valid commands and rejects junk', () => {
+    expect(parseVoiceCommand({ type: 'mute', muted: true })).toEqual({ type: 'mute', muted: true })
+    expect(parseVoiceCommand({ type: 'mute', muted: 'yes' })).toBeNull()
+    expect(parseVoiceCommand({ type: 'rm -rf' })).toBeNull()
+    expect(parseVoiceCommand(null)).toBeNull()
+  })
+})
+
+import { BargeInDetector, DEFAULT_BARGE_IN } from '../src/renderer/src/voice/engine/bargeIn'
+
+describe('BargeInDetector', () => {
+  const make = (needMs = 450) => new BargeInDetector({ ...DEFAULT_BARGE_IN, needMs })
+  const run = (d: BargeInDetector, pattern: number[]): boolean => {
+    let t = 0
+    for (const p of pattern) {
+      t += 32
+      if (d.feed(p, t)) return true
+    }
+    return false
+  }
+
+  it('ignores short blips such as a cough or a click', () => {
+    expect(run(make(), [0, 0.9, 0.9, 0.9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])).toBe(false)
+  })
+
+  it('ignores quiet leakage that never crosses the speech threshold', () => {
+    expect(run(make(), Array(80).fill(0.45))).toBe(false)
+  })
+
+  it('triggers on sustained speech', () => {
+    expect(run(make(), Array(20).fill(0.9))).toBe(true)
+  })
+
+  it('tolerates small gaps between words', () => {
+    const word = [...Array(6).fill(0.9), ...Array(3).fill(0.1)]
+    expect(run(make(), [...word, ...word, ...word])).toBe(true)
+  })
+
+  it('can be disabled', () => {
+    expect(run(make(0), Array(100).fill(0.99))).toBe(false)
+  })
+})
