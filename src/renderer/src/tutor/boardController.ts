@@ -10,7 +10,7 @@ const newNonce = (): number => Math.floor(Math.random() * 2 ** 31)
 // Excalidraw is mounted, so its font faces are registered.)
 let lessonFonts: Promise<unknown> | null = null
 const lessonFontsReady = (): Promise<unknown> =>
-  (lessonFonts ??= Promise.all(['18px Nunito', '26px "Lilita One"'].map((f) => document.fonts.load(f, 'Aa').catch(() => []))))
+  (lessonFonts ??= Promise.all(['18px Nunito', '26px "Lilita One"', '16px Cascadia'].map((f) => document.fonts.load(f, 'Aa').catch(() => []))))
 
 // Excalidraw reconciles by (version, versionNonce); every programmatic change
 // must bump the version or it can be treated as stale.

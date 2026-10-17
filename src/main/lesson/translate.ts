@@ -16,7 +16,7 @@ import {
   type Rect,
   type SizedNode
 } from './layout'
-import type { EdgeSpecT, NodeSpecT, VisualOp } from './ops'
+import { RUNNABLE_LANGUAGES, type EdgeSpecT, type NodeSpecT, type VisualOp } from './ops'
 import type { DataSeries } from './types'
 import { USER_REF, World, eid, type EchoMeta } from './world'
 
@@ -646,6 +646,89 @@ function timelineOp(d: Draft, op: Extract<VisualOp, { op: 'timeline' }>): void {
   focusOn(d, ids)
 }
 
+// Code cards look like a small dark editor window: line numbers in a gutter, one text element per line so the
+// narration can light up the line it is talking about, and (for runnable languages) an output strip that the
+// board's Run button fills in.
+const CODE = {
+  font: 16,
+  family: 3, // Cascadia: Excalidraw's monospace face
+  lineH: 24,
+  headerH: 36,
+  pad: 18,
+  outLines: 5,
+  bg: '#232326',
+  outBg: '#2c2c30',
+  text: '#f5f4f0',
+  comment: '#8a8f98',
+  gutter: '#6e6a75',
+  shade: '#ff8cc6'
+} as const
+const codeOutputId = (block: string): string => eid(`${block}__out_text`)
+const isComment = (line: string): boolean => /^\s*(#|\/\/|--|\/\*|\*)/.test(line)
+
+function codeOp(d: Draft, op: Extract<VisualOp, { op: 'code' }>): void {
+  const lines = op.lines.map((l) => l.replace(/\t/g, '    ').replace(/\s+$/, ''))
+  const runnable = RUNNABLE_LANGUAGES.includes(op.language)
+  const charW = CODE.font * 0.6
+  const gutterW = Math.ceil(String(lines.length).length * charW) + 24
+  const codeW = Math.ceil(Math.max(24, ...lines.map((l) => l.length)) * charW)
+  const w = Math.max(400, CODE.pad + gutterW + codeW + CODE.pad + 12)
+  const bodyH = lines.length * CODE.lineH + 16
+  const outH = runnable ? 30 + CODE.outLines * 20 + 14 : 0
+  const titleH = op.title ? 48 : 0
+  const size = { w, h: titleH + CODE.headerH + bodyH + outH }
+  const at = findFreeRect(size, d.world.obstacles(), d.usable, { fresh: !!op.new_region })
+  const ids: string[] = []
+  if (op.title) {
+    putTitle(d, eid(`${op.id}__title`), op.id, at.x, at.y, op.title)
+    ids.push(eid(`${op.id}__title`))
+  }
+  const top = at.y + titleH
+  const card = { x: at.x, y: top, w, h: size.h - titleH }
+  const pm = (id: string): EchoMeta => d.meta({ id, kind: 'part', block: op.id })
+
+  putShadow(d, op.id, 'rectangle', card, CODE.shade, op.id)
+  ids.push(shadowId(op.id))
+  const cardMeta = d.meta({ id: op.id, kind: 'code', block: op.id, language: op.language, code: lines.join('\n') })
+  d.put(
+    sk({ type: 'rectangle', id: eid(op.id), x: card.x, y: card.y, width: card.w, height: card.h, strokeColor: INK, backgroundColor: CODE.bg, fillStyle: 'solid', strokeWidth: 2, roughness: 0, roundness: { type: 3 }, groupIds: stickerGroup(op.id), customData: { echo: cardMeta } }),
+    card,
+    cardMeta
+  )
+  ids.push(eid(op.id))
+
+  // Header: window dots and the language name (the Run button is drawn over the right end by the board).
+  ;['#ff5f57', '#febc2e', '#28c840'].forEach((color, i) => {
+    const id = `${op.id}__light${i}`
+    const r = { x: card.x + 16 + i * 18, y: card.y + 13, w: 11, h: 11 }
+    d.put(sk({ type: 'ellipse', id: eid(id), x: r.x, y: r.y, width: r.w, height: r.h, strokeColor: color, backgroundColor: color, fillStyle: 'solid', strokeWidth: 1, roughness: 0, customData: { echo: pm(id) } }), r, pm(id))
+  })
+  textSk(d, eid(`${op.id}__lang`), card.x + 76, card.y + 9, op.language, FONT.small, CODE.gutter, pm(`${op.id}__lang`), 'left', CODE.family)
+
+  const bodyY = card.y + CODE.headerH + 8
+  const codeX = card.x + CODE.pad + gutterW
+  lines.forEach((line, i) => {
+    const n = i + 1
+    const y = bodyY + i * CODE.lineH
+    // An invisible full-width strip per line: what a highlight of "<id>__l<n>" lights up.
+    const lineId = `${op.id}__l${n}`
+    const lineRect = { x: card.x + 6, y, w: card.w - 12, h: CODE.lineH }
+    const lm = d.meta({ id: lineId, kind: 'line', block: op.id, line: n, label: line })
+    d.put(sk({ type: 'rectangle', id: eid(lineId), x: lineRect.x, y: lineRect.y, width: lineRect.w, height: lineRect.h, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, roughness: 0, customData: { echo: lm } }), lineRect, lm, line)
+    const numW = String(n).length * charW
+    textSk(d, eid(`${lineId}__num`), card.x + CODE.pad + gutterW - 16 - numW, y + 2, String(n), CODE.font, CODE.gutter, pm(`${lineId}__num`), 'left', CODE.family)
+    if (line.trim()) textSk(d, eid(`${lineId}__text`), codeX, y + 2, line, CODE.font, isComment(line) ? CODE.comment : CODE.text, pm(`${lineId}__text`), 'left', CODE.family)
+  })
+
+  if (runnable) {
+    const out = { x: card.x + 8, y: bodyY + lines.length * CODE.lineH + 8, w: card.w - 16, h: outH - 8 }
+    d.put(sk({ type: 'rectangle', id: eid(`${op.id}__out`), x: out.x, y: out.y, width: out.w, height: out.h, strokeColor: 'transparent', backgroundColor: CODE.outBg, fillStyle: 'solid', strokeWidth: 1, roughness: 0, roundness: { type: 3 }, customData: { echo: pm(`${op.id}__out`) } }), out, pm(`${op.id}__out`))
+    textSk(d, eid(`${op.id}__out_label`), out.x + 12, out.y + 8, 'OUTPUT', 13, CODE.gutter, pm(`${op.id}__out_label`), 'left', CODE.family)
+    textSk(d, codeOutputId(op.id), out.x + 12, out.y + 30, 'Press Run to see what it prints.', 15, CODE.comment, pm(`${op.id}__out_text`), 'left', CODE.family)
+  }
+  focusOn(d, ids)
+}
+
 function noteOp(d: Draft, op: Extract<VisualOp, { op: 'note' }>): void {
   const lines = wrapText(op.text, 26)
   const m = measure(lines, FONT.small + 1)
@@ -724,8 +807,24 @@ function highlightOp(d: Draft, op: Extract<VisualOp, { op: 'highlight' }>): void
     d.warnings.push('highlight skipped: no matching elements')
     return
   }
-  for (const { ref, rect } of targets) {
+  for (const { ref, rect, el } of targets) {
     const id = ringId(ref)
+    if (el?.echo?.kind === 'line') {
+      // A code line lights up like an editor selection: a pink wash over the line and a bar in the gutter.
+      const layers = [
+        { id: `${id}__glow`, r: rect, opacity: 30 },
+        { id, r: { x: rect.x, y: rect.y + 2, w: 4, h: rect.h - 4 }, opacity: 100 }
+      ]
+      for (const l of layers) {
+        const meta = d.meta({ id: l.id, kind: 'ring' })
+        d.put(
+          sk({ type: 'rectangle', id: eid(l.id), x: l.r.x, y: l.r.y, width: l.r.w, height: l.r.h, strokeColor: 'transparent', backgroundColor: ACCENT, fillStyle: 'solid', strokeWidth: 1, roughness: 0, opacity: l.opacity, roundness: { type: 3 }, customData: { echo: meta } }),
+          l.r,
+          meta
+        )
+      }
+      continue
+    }
     // A soft wide glow under a crisp ring: reads as "lit up" rather than "boxed".
     const layers = [
       { id: `${id}__glow`, pad: 14, width: 12, opacity: 22 },
@@ -885,6 +984,8 @@ export function applyOp(d: Draft, op: VisualOp): void {
       return tableOp(d, op)
     case 'timeline':
       return timelineOp(d, op)
+    case 'code':
+      return codeOp(d, op)
     case 'note':
       return noteOp(d, op)
     case 'highlight':
