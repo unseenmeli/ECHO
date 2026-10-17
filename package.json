@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

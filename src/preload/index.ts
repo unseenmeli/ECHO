@@ -5,6 +5,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 const api = {
   ask: (): void => ipcRenderer.send('companion:ask'),
   next: (): void => ipcRenderer.send('companion:next'),
+  openLesson: (): void => ipcRenderer.send('companion:open-lesson'),
   dragStart: (): void => ipcRenderer.send('companion:drag-start'),
   dragMove: (dx: number, dy: number): void => ipcRenderer.send('companion:drag-move', dx, dy)
 }
