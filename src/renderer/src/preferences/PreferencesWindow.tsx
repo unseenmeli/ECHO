@@ -16,7 +16,7 @@ function Row({ row, onSet, onForget }: RowProps) {
   const [draft, setDraft] = useState(saved)
   const [error, setError] = useState<string | null>(null)
 
-  // Follows changes made elsewhere: by voice, by Undo, or by "Forget everything".
+  // Follows changes made elsewhere: by voice, by Undo, or by "Forget preferences".
   useEffect(() => {
     setDraft(saved)
     setError(null)
@@ -64,7 +64,7 @@ function Row({ row, onSet, onForget }: RowProps) {
           type="text"
           value={draft}
           maxLength={row.maxLength}
-          placeholder="Not set"
+          placeholder={row.key === 'userName' ? 'Tell ECHO “my name is …”, or type it here' : 'Not set'}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => void commit(draft)}
           onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
@@ -101,15 +101,28 @@ export function PreferencesWindow() {
     return r.ok ? null : r.reason
   }
 
-  const saved = view?.rows.filter((r) => r.entry).length ?? 0
+  // Your name is about you, not about how ECHO teaches: it gets its own card, and "Forget" on the
+  // preferences below never touches it.
+  const you = view?.rows.filter((r) => r.permanent) ?? []
+  const teaching = view?.rows.filter((r) => !r.permanent) ?? []
+  const saved = teaching.filter((r) => r.entry).length
+  const row = (r: PreferenceRow) => (
+    <Row
+      key={r.key}
+      row={r}
+      onSet={(value) => set(r.key, value)}
+      onForget={() => void window.preferences.command({ type: 'forget', key: r.key })}
+    />
+  )
 
   return (
     <main className="prefs">
       <header className="prefs-header">
         <h1>What ECHO remembers</h1>
         <p>
-          Lasting preferences about how you like to learn. Tell ECHO “remember that I prefer diagrams” or “from now on,
-          be less formal”, or set them here. They stay on this computer, and ECHO never keeps a record of what you say.
+          Who you are, and how you like to learn. Introduce yourself once and ECHO keeps your name for good. Tell ECHO
+          “remember that I prefer diagrams” or “from now on, be less formal”, or set them here. They stay on this
+          computer, and ECHO never keeps a record of what you say.
         </p>
       </header>
 
@@ -117,24 +130,24 @@ export function PreferencesWindow() {
 
       {view && (
         <>
-          <ul className="pref-list">
-            {view.rows.map((row) => (
-              <Row
-                key={row.key}
-                row={row}
-                onSet={(value) => set(row.key, value)}
-                onForget={() => void window.preferences.command({ type: 'forget', key: row.key })}
-              />
-            ))}
-          </ul>
+          <div className="pref-scroll">
+            <section className="pref-section">
+              <h2>You</h2>
+              <ul className="pref-list is-you">{you.map(row)}</ul>
+            </section>
+            <section className="pref-section">
+              <h2>How ECHO teaches you</h2>
+              <ul className="pref-list">{teaching.map(row)}</ul>
+            </section>
+          </div>
           <footer className="prefs-footer">
-            <span>{saved === 0 ? 'Nothing saved yet.' : `${saved} saved`}</span>
+            <span>{saved === 0 ? 'No preferences saved yet.' : `${saved} saved · your name is kept`}</span>
             <button
               className="pref-forget-all"
               disabled={saved === 0}
               onClick={() => void window.preferences.command({ type: 'forget-all' })}
             >
-              Forget everything
+              Forget preferences
             </button>
           </footer>
         </>

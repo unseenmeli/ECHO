@@ -33,7 +33,10 @@ export const WAIT_LINES = {
   picture: ['Finding a picture.', 'Looking for a picture.'],
   whiteboard: ['Getting the whiteboard ready.', 'Setting up the whiteboard.'],
   screen: ['Looking at your screen.', 'Checking your screen.'],
-  other: ['One moment.', 'Just a second.']
+  // Thinking out loud rather than announcing a wait.
+  other: ['Hmmmm, uhhhh...', 'Hm hm hm...', 'Huh...', 'Hmmm...', 'Uhhh, hmm...'],
+  /** Still nothing after the first line: a word that the answer really is coming. */
+  longer: ['On it.', 'One more second.', 'Still thinking...']
 } as const
 
 // Words that might mean the learner is talking about the lesson window or asking for a real lesson. They never

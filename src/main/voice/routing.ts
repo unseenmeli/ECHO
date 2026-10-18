@@ -46,6 +46,12 @@ const SIGNALS: Array<{ name: string; weight: number; re: RegExp }> = [
   { name: 'why', weight: 1, re: /^(?:so |but |and |ok(?:ay)? )?why\b/i }
 ]
 
+/**
+ * Words that tie a short turn to the answer before it ("why?", "what about that?", "give me an example", "and the
+ * second one?"). Without one, a short question stands on its own ("what is my name?") and is routed on its own merits.
+ */
+const CONTINUES = /\b(?:that|this|it|its|those|these|them|they|one|ones|why|how come|what about|and (?:what|how|why|the)|example|another|more|again|simpler|deeper|further|instead|then|so|same|other|second|first|last|next|step|part)\b/i
+
 /** Small talk that never needs the strong model, even right after a hard answer. */
 const PLEASANTRY = /^(?:thanks?|thank you|ok(?:ay)?|cool|great|nice|got it|perfect|awesome|bye|goodbye|see you|stop|wait|yes|no|yep|nope)\b[\s,.!?]*(?:echo|so much|a lot)?[\s,.!?]*$/i
 
@@ -77,7 +83,8 @@ export function chooseModelTier(input: RouteInput): ModelRoute {
     reasons.push('long')
   }
   // "What about that?" right after a hard answer continues it: switching to the fast model mid-thread loses depth.
-  if (input.previousTier === 'strong' && words <= 12 && !PLEASANTRY.test(q) && on('follow-up')) {
+  // A short question that doesn't point back at that answer ("what is my name?") isn't a follow-up.
+  if (input.previousTier === 'strong' && words <= 12 && !PLEASANTRY.test(q) && CONTINUES.test(q) && on('follow-up')) {
     return { tier: 'strong', reasons: ['follow-up', ...reasons] }
   }
   // "Why?" or "Thanks, that's wrong" alone is too little to go on; a repair still counts.
