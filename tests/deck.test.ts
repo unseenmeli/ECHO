@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { DeckStudio, type DeckPort } from '../src/main/deck/deckTools'
+import { readVoiceConfig } from '../src/main/voice/config'
+import { VoiceSession } from '../src/main/voice/session'
 import { freePath } from '../src/main/deck/saveDeck'
-import type { ChatPort, ChatRequest } from '../src/main/voice/ports'
+import type { ChatPort, ChatRequest, EnginePort, SttHooks, TtsHooks, TtsPort } from '../src/main/voice/ports'
 import { DeckLineParser, deckFileName, isEchoPictureSearch, parseSlide, type DeckView } from '../src/shared/deck'
 
 const flush = async (): Promise<void> => {
@@ -102,13 +104,20 @@ describe('DeckStudio', () => {
       { chat: t.chat(lines(header, slide('One'), slide('Two'), slide('Three'))), conversation: [], webSearch: false }
     )
     await flush()
-    expect(t.studio.resolveSpoken('next slide')).toBe('Slide 2. Two')
-    expect(t.studio.resolveSpoken('go to slide three please')).toBe('Slide 3. Three')
-    expect(t.studio.resolveSpoken('next')).toBe("That's the last slide.")
-    expect(t.studio.resolveSpoken('go back')).toBe('Slide 2. Two')
-    expect(t.studio.resolveSpoken('what is the next step in photosynthesis')).toBeNull()
+    const on = (): number => t.studio.view.current + 1
+    expect(t.studio.resolveSpoken('next slide')).toBe(true)
+    expect(on()).toBe(2)
+    expect(t.studio.resolveSpoken('go to slide three please')).toBe(true)
+    expect(on()).toBe(3)
+    expect(t.studio.resolveSpoken('next')).toBe(true) // past the end: handled, stays put
+    expect(on()).toBe(3)
+    expect(t.studio.resolveSpoken('go back')).toBe(true)
+    expect(on()).toBe(2)
+    expect(t.studio.resolveSpoken('the first slide')).toBe(true)
+    expect(on()).toBe(1)
+    expect(t.studio.resolveSpoken('what is the next step in photosynthesis')).toBe(false)
     const closed = setup(false)
-    expect(closed.studio.resolveSpoken('next slide')).toBeNull()
+    expect(closed.studio.resolveSpoken('next slide')).toBe(false)
   })
 
   it('saves by voice and refuses while still writing', async () => {
@@ -120,5 +129,100 @@ describe('DeckStudio', () => {
     expect(t.studio.handle({ name: 'presentation', input: { action: 'save_pptx' } }, ctx)).toMatch(/PowerPoint/)
     await flush()
     expect(t.saved).toEqual(['Photosynthesis.pptx'])
+  })
+})
+
+// --- In a conversation: moving slides is always silent ------------------------------------------------------
+
+function conversation() {
+  const cfg = readVoiceConfig({ ANTHROPIC_API_KEY: 'a', DEEPGRAM_API_KEY: 'd' })
+  if (!cfg.ok) throw new Error('config')
+  const t = setup()
+  const voiceCalls: ChatRequest[] = []
+  const scripts: Array<(req: ChatRequest) => void> = []
+  const spoken: string[] = []
+  const cleared: string[] = []
+  let stt: SttHooks | null = null
+  const engine: EnginePort = {
+    start() {},
+    stop() {},
+    setMuted() {},
+    sendAudio() {},
+    segmentMarker() {},
+    responseDone() {},
+    clearPlayback: (id) => cleared.push(id),
+    duck() {}
+  }
+  const tts = (_h: TtsHooks): TtsPort => ({
+    ensureConnected() {},
+    begin() {},
+    speak: (text) => spoken.push(text),
+    canFlush: () => true,
+    flush: () => 0,
+    clear() {},
+    close() {}
+  })
+  const session = new VoiceSession({
+    config: cfg.config,
+    engine,
+    chat: { stream: async (req) => (voiceCalls.push(req), scripts.shift()?.(req)) },
+    createStt: (h) => ((stt = h), { connect() {}, sendAudio() {}, forceEndTurn() {}, close() {} }),
+    createTts: tts,
+    emit: () => {},
+    log: () => {},
+    deck: t.studio
+  })
+  session.start()
+  session.onEngineReady()
+  stt!.onStatus({ kind: 'connected' })
+  let n = 0
+  const say = async (text: string): Promise<void> => {
+    stt!.onTurn({ event: 'StartOfTurn', transcript: text.split(' ')[0], turnIndex: n })
+    stt!.onTurn({ event: 'EndOfTurn', transcript: text, turnIndex: n })
+    n += 1
+    await flush()
+  }
+  return { ...t, session, voiceCalls, scripts, spoken, cleared, say }
+}
+
+async function withDeck() {
+  const c = conversation()
+  c.studio.handle(
+    { name: 'build_presentation', input: { topic: 'Photosynthesis', brief: '' } },
+    { chat: c.chat(lines(header, slide('One'), slide('Two'), slide('Three'))), conversation: [], webSearch: false }
+  )
+  await flush()
+  await new Promise((r) => setTimeout(r, 0)) // the "deck is ready" line
+  c.spoken.length = 0
+  return c
+}
+
+describe('slide navigation in a conversation', () => {
+  it('moves on "next slide" without asking the model or saying a word', async () => {
+    const c = await withDeck()
+    await c.say('Next slide.')
+    await c.say('go back')
+    await c.say('slide three')
+    expect(c.voiceCalls).toEqual([])
+    expect(c.spoken).toEqual([])
+    expect(c.studio.view.current).toBe(2)
+  })
+
+  it('cuts off anything the model says when it moves the slide itself', async () => {
+    const c = await withDeck()
+    c.scripts.push((r) => {
+      r.onText('Sure, here is the slide about light. ')
+      r.onToolUse?.({ name: 'presentation', input: { action: 'go_to', slide: 2 } })
+    })
+    await c.say('show me the one about light')
+    expect(c.studio.view.current).toBe(1)
+    expect(c.cleared.length).toBeGreaterThan(0) // what was already queued for speech is dropped
+    // The next question is answered on its own: not merged with the slide command, and the cut-off words were
+    // never kept as something ECHO said.
+    c.scripts.push((r) => r.onText('Plants use light to make sugar.'))
+    await c.say('What do plants use light for?')
+    const sent = c.voiceCalls.at(-1)!.messages
+    expect(sent.at(-1)?.content).toBe('What do plants use light for?')
+    expect(sent.some((m) => String(m.content).includes('here is the slide'))).toBe(false)
   })
 })
