@@ -48,7 +48,7 @@ import type { Picture, PictureLookup } from '../lesson/pictures'
 import { PREFERENCE_TOOL_GUIDE, PREFERENCE_TOOLS, PreferenceTools } from '../memory/preferenceTools'
 import { composeGuide, composeTools, ComposeTools, type ComposePort } from '../compose/composeTools'
 import type { DraftEdits } from '../../shared/compose'
-import { DECK_GUIDE, DECK_TOOL_NAMES, DECK_TOOLS, type DeckStudio } from '../deck/deckTools'
+import { DECK_GUIDE, DECK_TOOL_NAMES, DECK_TOOLS, isSlideMove, type DeckStudio } from '../deck/deckTools'
 import {
   IDLE_SNAPSHOT,
   type EngineError,
@@ -625,16 +625,20 @@ export class VoiceSession {
       return
     }
     if (this.reply) this.interrupt('new-turn')
+    // "Next slide", "go back", "slide three" while a deck is open: the slide moves and ECHO says nothing. No model
+    // call, no reply, and nothing in the history (an unanswered turn there would be merged into the next question).
+    if (this.deps.deck?.resolveSpoken(text)) {
+      this.log('[voice] deck navigation (spoken, silent)')
+      this.refresh()
+      this.scheduleAnnouncement()
+      return
+    }
     // If ECHO just asked whether to remember something, a short yes/no settles it without another model call.
     const answer = this.prefTools?.resolveProposal(text) ?? this.compose?.resolveSpoken(text)
     if (answer?.kind === 'sent' || answer?.kind === 'cancelled') this.log(`[voice] draft ${answer.kind} (spoken)`)
-    // "Next slide", "go back", "slide three" while a deck is open: moved at once, no model call.
-    const slide = answer ? null : this.deps.deck?.resolveSpoken(text)
-    if (slide) this.log('[voice] deck navigation (spoken)')
     const unsure = unsureWords(info.words, this.deps.config.sttUnsureConfidence)
     if (unsure.length) this.log(`[voice] speech recognition unsure of: ${unsure.join(', ')}`)
-    const localText = answer?.spoken ?? slide
-    this.submit(text, localText ? { localText } : { unsure })
+    this.submit(text, answer ? { localText: answer.spoken } : { unsure })
   }
 
   private confirmTurn(turn: Turn): void {
@@ -786,6 +790,8 @@ export class VoiceSession {
         material: call.name === 'build_presentation' ? this.deckMaterial(reply, call) : null
       })
       this.log(`[voice] ${call.name}: ${note.split(/[:;.]/)[0]}`)
+      // Moving slides is silent: whatever the model says with it is cut off, once this callback has returned.
+      if (isSlideMove(call)) queueMicrotask(() => this.silence(reply))
       return note
     }
     if (call.name === 'draft_message' && this.compose) {
@@ -796,6 +802,20 @@ export class VoiceSession {
     const outcome = this.prefTools?.handle(call, reply.question)
     if (outcome) this.log(`[voice] ${outcome.tool}: ${outcome.note}`)
     return outcome?.note
+  }
+
+  /** Ends a reply without a word: nothing more is said, only an app note reaches history, and it leaves the transcript. */
+  private silence(reply: Reply): void {
+    if (this.reply !== reply) return
+    this.log('[voice] slide moved by the model; reply silenced')
+    reply.abort.abort()
+    this.tts?.clear()
+    this.deps.engine.clearPlayback(reply.id)
+    reply.fullText = ''
+    // An app note stands in for the reply, so the next question stays a turn of its own.
+    this.history.commitAssistant('[moved the slide without speaking]')
+    this.finishReply(reply, false)
+    this.removeEntry(reply.id)
   }
 
   /** The rules for the preference tools (cached with the system prompt) and the saved preferences (sent after it). */

@@ -16,6 +16,7 @@ import { DeckStudio } from '../deck/deckTools'
 import { closeDeck, isDeckOpen, printDeck, showDeck } from '../deck/deckWindow'
 import { saveDeck } from '../deck/saveDeck'
 import { withEchoPicture } from '../deck/echoPicture'
+import iconPath from '../../../resources/icon.png?asset'
 import { composeUrl, type Draft, type DraftEdits } from '../../shared/compose'
 import type { PreferenceStore } from '../memory/preferenceStore'
 import type { StudyMaterialPort } from '../study/studyMaterial'
@@ -175,7 +176,7 @@ class VoiceHost {
         close: closeDeck,
         isOpen: isDeckOpen,
         save: async (deck, format) => {
-          const path = await saveDeck(deck, format, app.getPath('documents'), printDeck)
+          const path = await saveDeck(deck, format, app.getPath('documents'), printDeck, iconPath)
           const failed = await shell.openPath(path)
           if (failed) console.log(`[deck] saved, but could not open it: ${failed}`)
           return path

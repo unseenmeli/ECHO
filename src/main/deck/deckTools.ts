@@ -67,7 +67,7 @@ export const DECK_TOOLS: ChatTool[] = [
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['go_to', 'save_pdf', 'save_pptx', 'close', 'open'] },
-        slide: { type: 'integer', description: 'go_to only: the slide number, from 1.' }
+        slide: { type: 'integer', description: 'go_to only: the slide number, from 1. Moving slides is silent: say nothing at all, before or after.' }
       },
       required: ['action']
     }
@@ -76,13 +76,19 @@ export const DECK_TOOLS: ChatTool[] = [
 
 export const DECK_TOOL_NAMES = new Set(DECK_TOOLS.map((t) => t.name))
 
+/** Moving to another slide, which ECHO always does without a word. */
+export function isSlideMove(call: ToolCall): boolean {
+  return call.name === 'presentation' && (call.input as Record<string, unknown> | null)?.action === 'go_to'
+}
+
 /** Appended to the system prompt whenever the deck tools are offered. */
 export const DECK_GUIDE = `MAKING PRESENTATIONS
 
 You can build slide decks for the user, entirely by voice; they never fill anything in.
 - When the user asks for a presentation, deck or slides, call build_presentation right away. Don't ask questions first unless the topic itself is unclear: pick a sensible audience, length and tone, and put everything useful from the conversation, screen or study material into the brief.
 - The deck is written in the background and appears slide by slide in its own window. After calling it, say in one short sentence that you're making it. Don't list or read out the slides, and don't say it's finished: the app announces that.
-- To change the deck, call revise_presentation with the complete change. "Next slide", "go back" and "slide three" are usually handled by the app; use presentation go_to if one reaches you.
+- To change the deck, call revise_presentation with the complete change.
+- Moving between slides is silent. "Next slide", "go back", "slide three" and the like are usually handled by the app. If one reaches you, call presentation go_to and say nothing at all: no acknowledgement, no slide title, nothing before or after the call. The app cuts off anything you say with it.
 - To save, call presentation with save_pdf, or save_pptx when they say PowerPoint, Keynote or pptx (PDF when they don't say). It goes to the Echo Presentations folder in Documents and opens by itself; say so in one short sentence.
 - <presentation> in the turn context shows the deck, its slides and the one on screen. Use it to answer questions about the deck.`
 
@@ -111,7 +117,7 @@ Writing good slides:
 - notes: what the presenter says on that slide, 2 to 4 natural spoken sentences.
 - A picture of ECHO itself (ECHO's character art) is available: use image {"search":"${ECHO_PICTURE_SEARCH}"}. A deck about ECHO puts it on the title slide.
 - image search: 2 to 5 plain words naming a real, photographable or diagrammed subject that Wikimedia Commons would have ("red blood cells microscope", "Eiffel Tower"). Use pictures on the title slide and on 2 to 4 other slides where seeing the thing helps; never for abstract ideas.
-- theme: midnight (bold, tech), paper (classic, humanities), ocean (science, calm), forest (nature, health, light), sunset (creative, energetic).
+- theme: ECHO's two looks. paper (the default): warm dot paper like ECHO's whiteboard, for teaching, school and most topics. ink: black with hot pink, like ECHO's app icon, for bold pitches, music, art, tech, and any deck about ECHO itself.
 - Don't invent facts, statistics, quotes or sources. When the brief or <study_material> covers the topic, build from it; when a deck is about ECHO itself, use only what <study_material> says about ECHO.
 - The title and every text field are plain text: no Markdown, no emoji.`
 
@@ -203,11 +209,10 @@ export class DeckStudio {
     const deck = this.deck
     if (!deck?.slides.length) return 'no deck is open. Offer to build one'
     switch (action) {
-      case 'go_to': {
-        if (!Number.isInteger(slide) || slide < 1 || slide > deck.slides.length) return `there is no slide ${slide}; the deck has ${deck.slides.length}`
-        this.goTo(slide - 1)
-        return `showing slide ${slide}: ${deck.slides[slide - 1].title}`
-      }
+      case 'go_to':
+        // Silent, like the spoken commands: past either end it stays on the first or last slide.
+        if (Number.isInteger(slide)) this.select(Math.min(Math.max(slide - 1, 0), deck.slides.length - 1))
+        return 'moved. Say nothing'
       case 'save_pdf':
       case 'save_pptx': {
         if (this.job) return "the deck is still being written; say you'll save it once it's ready, and to ask again in a moment"
@@ -227,29 +232,27 @@ export class DeckStudio {
   }
 
   /**
-   * "Next slide", "go back", "slide three": a short spoken command settles it without the model. Returns what
-   * ECHO says (the slide's title), or null when the turn is anything else.
+   * "Next slide", "go back", "slide three": a short spoken command moves the deck without the model, and ECHO says
+   * nothing (moving slides is always silent, even past either end). True when the turn was such a command.
    */
-  resolveSpoken(transcriptText: string): string | null {
+  resolveSpoken(transcriptText: string): boolean {
     const deck = this.deck
-    if (!deck?.slides.length || !this.port.isOpen()) return null
+    if (!deck?.slides.length || !this.port.isOpen()) return false
     const t = transcriptText.trim().replace(/\s+/g, ' ')
-    if (!t || t.split(' ').length > 8) return null
-    let target: number | null = null
+    if (!t || t.split(' ').length > 8) return false
+    let target: number
     if (NEXT.test(t)) target = this.current + 1
     else if (PREVIOUS.test(t)) target = this.current - 1
     else if (FIRST.test(t)) target = 0
     else if (LAST.test(t)) target = deck.slides.length - 1
     else {
       const m = GOTO.exec(t)
-      if (!m) return null
+      if (!m) return false
       const n = /^\d+$/.test(m[1]) ? Number(m[1]) : NUMBER_WORDS.indexOf(m[1].toLowerCase())
       target = n - 1
     }
-    if (target < 0) return "That's the first slide."
-    if (target >= deck.slides.length) return this.status.kind === 'building' ? "That one isn't written yet." : "That's the last slide."
-    this.goTo(target)
-    return `Slide ${target + 1}. ${deck.slides[target].title}`
+    this.select(Math.min(Math.max(target, 0), deck.slides.length - 1))
+    return true
   }
 
   /** What the voice model needs to know about the deck, for the turn context. */

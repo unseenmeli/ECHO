@@ -2,13 +2,16 @@
 // slide); the app checks every line, finds the pictures, shows the deck in its own window and exports it to PDF or
 // PowerPoint. Nothing here is ever filled in by the user.
 
+// ECHO's two looks. Paper is the lesson board (warm dot paper, ink type, pink as a sparing tint); ink is the app
+// icon (black, with hot pink "echo" afterimages). `accent` fills shapes and afterimages; `accentText` is the pink
+// that stays readable as small text on that background.
 export const THEMES = {
-  midnight: { background: '#14162b', surface: '#1f2240', text: '#f4f2ff', muted: '#a9a6c9', accent: '#ff6fa8' },
-  paper: { background: '#f6f1e7', surface: '#ebe3d3', text: '#22201c', muted: '#6d665a', accent: '#d2502e' },
-  ocean: { background: '#0d2a3a', surface: '#123a50', text: '#eef8ff', muted: '#9cc3d8', accent: '#3fd0c9' },
-  forest: { background: '#f1f5ee', surface: '#dfe9d8', text: '#1d2a1b', muted: '#5b6e56', accent: '#2f8a4c' },
-  sunset: { background: '#2b1622', surface: '#3d1f30', text: '#fff3ea', muted: '#d7aebd', accent: '#ffb347' }
+  paper: { background: '#f5f4f0', surface: '#ffffff', text: '#1c1c1e', muted: '#77777e', accent: '#ff2e9a', accentText: '#c41f74', dot: 'rgba(60, 60, 67, 0.16)' },
+  ink: { background: '#0e0e11', surface: '#1b1b20', text: '#f5f4f0', muted: '#9c9ca6', accent: '#ff2e9a', accentText: '#ff5cb1', dot: 'rgba(255, 255, 255, 0.07)' }
 } as const
+
+/** Theme names from before the two ECHO looks, mapped to the closer one. */
+const OLD_THEMES: Record<string, ThemeId> = { midnight: 'ink', ocean: 'ink', sunset: 'ink', forest: 'paper' }
 
 export type ThemeId = keyof typeof THEMES
 export const THEME_IDS = Object.keys(THEMES) as ThemeId[]
@@ -101,7 +104,7 @@ export function parseHeader(raw: unknown): DeckHeader | null {
   if (r.kind !== 'deck') return null
   const title = text(r.title, 120)
   if (!title) return null
-  const theme = THEME_IDS.includes(r.theme as ThemeId) ? (r.theme as ThemeId) : 'midnight'
+  const theme = THEME_IDS.includes(r.theme as ThemeId) ? (r.theme as ThemeId) : (OLD_THEMES[String(r.theme)] ?? 'paper')
   const subtitle = text(r.subtitle, 200)
   return { title, theme, ...(subtitle ? { subtitle } : {}) }
 }
