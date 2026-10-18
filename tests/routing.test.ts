@@ -45,6 +45,11 @@ describe('model routing', () => {
     // A short follow-up continues a hard answer on the same model; small talk does not.
     expect(route('What about that?', { previousTier: 'strong' }).reasons[0]).toBe('follow-up')
     expect(route('Thanks!', { previousTier: 'strong' }).tier).toBe('fast')
+    // A short question that stands on its own isn't a follow-up, even right after a deep dive.
+    expect(route('What is my name?', { previousTier: 'strong' }).tier).toBe('fast')
+    expect(route('Who wrote Hamlet?', { previousTier: 'strong' }).tier).toBe('fast')
+    expect(route('And the second one?', { previousTier: 'strong' }).reasons[0]).toBe('follow-up')
+    expect(route('Can you give me an example?', { previousTier: 'strong' }).reasons[0]).toBe('follow-up')
     expect(route('What about that?').tier).toBe('fast')
     // Each route can be switched off.
     const routes = parseQualityRoutes('reasoning')

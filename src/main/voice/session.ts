@@ -86,7 +86,9 @@ const ROUTE_TIMEOUT_MS = 3000
 /** How long a picture request waits for the picture to be found. */
 const PICTURE_WAIT_MS = 10000
 /** If nothing has been said this long after the learner finished, a brief wait line fills the silence. */
-const WAIT_LINE_DELAY_MS = 2000
+const WAIT_LINE_DELAY_MS = 3500
+/** Still no answer this long after the learner finished: a second line says it's coming. */
+const LONG_WAIT_LINE_DELAY_MS = 6000
 const CLOSED_LESSON_ACK = 'Okay, I closed the whiteboard.'
 const NOTHING_TO_CLOSE_ACK = "The whiteboard isn't open right now."
 
@@ -160,6 +162,8 @@ interface Reply {
   deep: boolean
   /** Which model answers when this isn't a deep dive: the fast one, or the strong one for a hard question. */
   tier: ModelTier
+  /** On the strong model only because it continues a hard answer: answered without thinking first, so it starts fast. */
+  followUp: boolean
   /** Words of the question speech recognition was unsure of. */
   unsure: string[]
   /** There were earlier turns when this question was asked (something "this" could refer to). */
@@ -689,6 +693,7 @@ export class VoiceSession {
       waitTimer: null,
       deep: !!options.forceDeep,
       tier: 'fast',
+      followUp: false,
       unsure: options.unsure ?? [],
       hadHistory: this.history.toMessages(3).length > 1,
       practice: false,
@@ -730,6 +735,17 @@ export class VoiceSession {
     reply.filler = this.lastFiller = pickFiller(this.lastFiller, Math.random, lines)
     this.speakPhrase(reply, { text: reply.filler, flush: false })
     this.flushSegment(reply, true)
+    reply.waitTimer = setTimeout(() => this.speakLongWaitLine(reply, epoch), LONG_WAIT_LINE_DELAY_MS - WAIT_LINE_DELAY_MS)
+  }
+
+  /** Six seconds and still only the first wait line: "On it." Both lines together are the filler, kept out of history. */
+  private speakLongWaitLine(reply: Reply, epoch: number): void {
+    reply.waitTimer = null
+    if (epoch !== this.epoch || this.reply !== reply || reply.abort.signal.aborted || !reply.filler || reply.fullText !== reply.filler) return
+    const line = pickFiller(null, Math.random, WAIT_LINES.longer)
+    this.speakPhrase(reply, { text: line, flush: false })
+    this.flushSegment(reply, true)
+    reply.filler = reply.fullText
   }
 
   /**
@@ -841,6 +857,8 @@ export class VoiceSession {
   private reasoningFor(reply: Reply, lesson: boolean): Pick<ChatRequest, 'reasoning' | 'effort'> {
     const cfg = this.deps.config
     if (reply.deep) return { reasoning: 'adaptive', effort: cfg.deepEffort }
+    // A plain follow-up keeps the strong model's depth but skips its thinking, so it doesn't stall like a new hard question.
+    if (reply.tier === 'strong' && reply.followUp) return { reasoning: 'off', effort: 'medium' }
     if (reply.tier === 'strong') return { reasoning: cfg.strongThinking, effort: cfg.strongEffort }
     return { reasoning: 'off', effort: lesson || reply.practice ? 'medium' : 'low' }
   }
@@ -860,6 +878,7 @@ export class VoiceSession {
         routes: this.deps.config.qualityRoutes
       })
       reply.tier = route.tier
+      reply.followUp = route.tier === 'strong' && route.reasons.length === 1 && route.reasons[0] === 'follow-up'
       this.log(`[voice] model route: ${route.tier} (${route.reasons.join(', ')})`)
     }
     this.lastTier = reply.deep ? 'strong' : reply.tier

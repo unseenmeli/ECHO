@@ -664,14 +664,15 @@ describe('screen context', () => {
     const b = setup(watching())
     b.ready()
     b.chat.next(async (req) => {
-      await new Promise((r) => setTimeout(r, 3000)) // a slow first word
+      await new Promise((r) => setTimeout(r, 5000)) // a slow first word
       await reply('It is a login form. ', 'The password field is empty.')(req)
     })
     await ask(b, 'Hey, do you see this thing on my screen?')
     const tts = b.ttss.at(-1)!
-    vi.advanceTimersByTime(1000)
+    // ECHO gets three and a half seconds to start answering before it says anything to fill the silence.
+    vi.advanceTimersByTime(3400)
     expect(tts.spoken).toEqual([])
-    vi.advanceTimersByTime(1100)
+    vi.advanceTimersByTime(200)
     expect(WAIT_LINES.screen).toContain(tts.spoken[0]?.trim())
     expect(tts.flushes).toBe(1)
     vi.advanceTimersByTime(2000)
@@ -685,6 +686,30 @@ describe('screen context', () => {
     b.chat.next(reply('Sure.'))
     await ask(b, 'Thanks', 1)
     expect(b.chat.calls[1].messages[1]).toEqual({ role: 'assistant', content: 'It is a login form. The password field is empty.' })
+  })
+
+  it('after six seconds of silence adds that the answer is coming, and keeps both lines out of history', async () => {
+    const b = setup(watching())
+    b.ready()
+    b.chat.next(async (req) => {
+      await new Promise((r) => setTimeout(r, 8000)) // a very slow first word
+      await reply('It is a login form.')(req)
+    })
+    await ask(b, 'What is this thing on my screen?')
+    const tts = b.ttss.at(-1)!
+    vi.advanceTimersByTime(3600)
+    expect(tts.spoken.length).toBe(1)
+    vi.advanceTimersByTime(2500) // 6.1 s
+    expect(WAIT_LINES.longer).toContain(tts.spoken[1]?.trim())
+    vi.advanceTimersByTime(2000)
+    await flushMicrotasks()
+    expect(tts.spoken.slice(2).join('')).toContain('It is a login form.')
+    for (let seg = 0; seg < tts.flushes; seg++) tts.flushed('r1', seg)
+    b.session.onPlayback({ kind: 'started', responseId: 'r1', at: 1 })
+    b.session.onPlayback({ kind: 'ended', responseId: 'r1', at: 2 })
+    b.chat.next(reply('Sure.'))
+    await ask(b, 'Thanks', 1)
+    expect(b.chat.calls[1].messages[1]).toEqual({ role: 'assistant', content: 'It is a login form.' })
   })
 
   it('attaches the screenshot to every turn, without a filler for other questions', async () => {
@@ -713,7 +738,7 @@ describe('screen context', () => {
     b.chat.next(never())
     b.chat.next(reply('That is a for loop.'))
     await ask(b, 'Can you look at')
-    vi.advanceTimersByTime(2100) // nothing came back, so the wait line plays
+    vi.advanceTimersByTime(3600) // nothing came back, so the wait line plays
     b.ttss.at(-1)!.audio('r1')
     b.session.onPlayback({ kind: 'started', responseId: 'r1', at: 1 })
 
