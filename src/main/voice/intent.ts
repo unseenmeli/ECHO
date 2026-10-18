@@ -94,7 +94,7 @@ DEEP: the learner is asking ECHO to teach or explain something in depth: a full 
 CLOSE: the learner is telling ECHO to close, hide, dismiss or end the lesson window, whiteboard or deep dive.
 PRACTICE: the learner wants to be quizzed, tested, to practise, or to have their understanding checked with questions.
 STOP_PRACTICE: a practice activity is running and the learner wants to stop it or move on.
-ANSWER: anything else. That includes questions about what a deep dive or a quiz is, remarks that only mention a lesson or the board, subjects like "deep learning", and requests to close something other than ECHO's lesson window.
+ANSWER: anything else. That includes requests to make, change, show or save slides or a presentation (ECHO has a separate deck window for those), questions about what a deep dive or a quiz is, remarks that only mention a lesson or the board, subjects like "deep learning", and requests to close something other than ECHO's lesson window.
 Judge what the learner means, not which words they used. When unsure, reply ANSWER.`
 
 export function routerPrompt(transcript: string, lessonOpen: boolean, lastEchoLine: string | null, practising = false): string {

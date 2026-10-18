@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import type { CompanionApi } from '../../preload'
+import type { DeckApi } from '../../preload/deck'
 import type { DraftApi } from '../../preload/draft'
 import type { AccessApi } from '../../preload/preferences'
 import type { TutorApi } from '../../preload/tutor'
@@ -15,6 +16,7 @@ declare global {
     preferences: PreferencesApi
     voiceEngine: VoiceEngineApi
     draft: DraftApi
+    deck: DeckApi
     access: AccessApi
   }
 }

@@ -90,6 +90,7 @@ export default defineConfig({
           tutor: resolve(__dirname, 'src/preload/tutor.ts'),
           preferences: resolve(__dirname, 'src/preload/preferences.ts'),
           draft: resolve(__dirname, 'src/preload/draft.ts'),
+          deck: resolve(__dirname, 'src/preload/deck.ts'),
           voiceEngine: resolve(__dirname, 'src/preload/voiceEngine.ts')
         }
       }
@@ -104,6 +105,7 @@ export default defineConfig({
           tutor: resolve(__dirname, 'src/renderer/tutor.html'),
           preferences: resolve(__dirname, 'src/renderer/preferences.html'),
           draft: resolve(__dirname, 'src/renderer/draft.html'),
+          deck: resolve(__dirname, 'src/renderer/deck.html'),
           voiceEngine: resolve(__dirname, 'src/renderer/voice-engine.html')
         }
       }
