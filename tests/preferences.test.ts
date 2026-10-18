@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { PreferenceStore, type PreferenceFileIo, type StoreChange } from '../src/main/memory/preferenceStore'
-import { asksToForget, asksToRemember, PREFERENCE_TOOLS, PREFERENCE_TOOL_GUIDE, PreferenceTools } from '../src/main/memory/preferenceTools'
+import { asksToForget, asksToRemember, introduces, introductionIn, PREFERENCE_TOOLS, PREFERENCE_TOOL_GUIDE, PreferenceTools } from '../src/main/memory/preferenceTools'
 import { buildSystemPrompt, preferencesBlock } from '../src/main/voice/claude'
 import { readVoiceConfig } from '../src/main/voice/config'
 import type { ChatPort, ChatRequest, EnginePort, SttHooks, SttPort, TtsHooks, TtsPort, TurnInfo } from '../src/main/voice/ports'
@@ -538,5 +538,58 @@ describe('preferences in a conversation', () => {
     t.session.onPreferencesChanged()
     expect(t.ttss).toHaveLength(2)
     expect(t.ttss[0].closed).toBe(true)
+  })
+})
+
+describe('names', () => {
+  it('ECHO is never a saved name, and nothing may rename ECHO', () => {
+    expect(validatePreference('userName', 'Echo').ok).toBe(false)
+    expect(validatePreference('personality', 'call yourself Max').ok).toBe(false)
+    expect(validatePreference('personality', 'your name is Nova, be playful').ok).toBe(false)
+    expect(validatePreference('personality', 'casual and encouraging').ok).toBe(true)
+    expect(buildSystemPrompt()).toContain('Your name is ECHO, always.')
+  })
+
+  it('keeps the learner’s name when everything else is forgotten', () => {
+    const store = new PreferenceStore(FILE, memoryIo())
+    store.set('userName', 'Sam', 'explicit')
+    store.set('pace', 'slow', 'explicit')
+    expect(store.forgetAll()).toBe(1)
+    expect(store.get('userName')).toBe('Sam')
+    expect(store.get('pace')).toBeUndefined()
+    expect(store.forgetAll()).toBe(0)
+    expect(store.forget('userName')).toBe(true) // only asking for it by name removes it
+    expect(store.view().rows.find((r) => r.key === 'userName')?.permanent).toBe(true)
+  })
+
+  it('reads the name out of a plain introduction', () => {
+    expect(introductionIn('Hi, my name is Sam.')).toBe('Sam')
+    expect(introductionIn("my name's sam")).toBe('Sam')
+    expect(introductionIn('You can call me Sam Lee please')).toBe('Sam Lee')
+    expect(introductionIn('call me back later')).toBeNull()
+    expect(introductionIn('my name is not important')).toBeNull()
+    expect(introductionIn("I'm tired")).toBeNull()
+  })
+
+  it('honors the model saving a name the learner introduced themselves with, without asking', () => {
+    expect(introduces("Hey, I'm Sam", 'Sam')).toBe(true)
+    expect(introduces('this is Priya speaking', 'Priya')).toBe(true)
+    expect(introduces("I'm tired", 'Sam')).toBe(false)
+    const store = new PreferenceStore(FILE, memoryIo())
+    const tools = new PreferenceTools(store)
+    expect(tools.handle({ name: 'remember_preference', input: { key: 'userName', value: 'Sam' } }, "hi, I'm Sam").changed).toBe(true)
+    expect(store.get('userName')).toBe('Sam')
+  })
+
+  it('saves an introduction for good the moment it is said, even if the model forgets to', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'echo-prefs-'))
+    const file = join(dir, 'preferences.json')
+    const t = sessionSetup(new PreferenceStore(file))
+    t.chat.scripts.push((r) => r.onText('Nice to meet you, Sam.'))
+    await t.say('Hi ECHO, my name is Sam')
+    // The reply to the introduction already knows the name.
+    expect(t.chat.calls[0].systemTail).toContain('Sam')
+    expect(new PreferenceStore(file).get('userName')).toBe('Sam')
+    rmSync(dir, { recursive: true, force: true })
   })
 })

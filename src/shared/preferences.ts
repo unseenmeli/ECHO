@@ -53,6 +53,8 @@ export interface PreferenceDef {
   /** Closed set of values; absent for short free text. */
   options?: readonly string[]
   maxLength: number
+  /** Kept when everything else is forgotten: once the learner has introduced themselves, it stays. */
+  permanent?: boolean
 }
 
 export const PREFERENCE_DEFS: readonly PreferenceDef[] = [
@@ -65,7 +67,13 @@ export const PREFERENCE_DEFS: readonly PreferenceDef[] = [
   { key: 'proactivity', label: 'Proactivity', hint: 'Whether ECHO offers next steps and checks understanding on its own.', options: ['reactive', 'balanced', 'proactive'], maxLength: 12 },
   { key: 'voice', label: 'Voice', hint: "ECHO's speaking voice. Applies from the next reply.", options: VOICES, maxLength: 30 },
   { key: 'language', label: 'Language', hint: 'The language ECHO answers in.', maxLength: 30 },
-  { key: 'userName', label: 'What ECHO should call you', hint: 'Your name, for ECHO to use when speaking to you.', maxLength: 40 }
+  {
+    key: 'userName',
+    label: 'Your name',
+    hint: "Your own name, saved the first time you introduce yourself. ECHO's own name is always ECHO.",
+    maxLength: 40,
+    permanent: true
+  }
 ]
 
 const DEF_BY_KEY = new Map<string, PreferenceDef>(PREFERENCE_DEFS.map((d) => [d.key, d]))
@@ -96,6 +104,9 @@ export function looksSensitive(text: string): boolean {
 
 export type Validated = { ok: true; value: string } | { ok: false; reason: string }
 
+/** ECHO's name never changes, so no saved value may rename it. */
+const RENAMES_ECHO = /\b(?:call (?:yourself|you)|your (?:new )?name|name yourself|rename|be called|go by)\b/i
+
 /** Normalizes and checks a value for `key`. Used for every write, whoever asks (agent, settings window, disk). */
 export function validatePreference(key: PreferenceKey, raw: unknown): Validated {
   if (typeof raw !== 'string') return { ok: false, reason: 'The value must be text.' }
@@ -111,6 +122,8 @@ export function validatePreference(key: PreferenceKey, raw: unknown): Validated 
     return match ? { ok: true, value: match } : { ok: false, reason: `${def.label} must be one of: ${def.options.join(', ')}.` }
   }
   if (value.length > def.maxLength) return { ok: false, reason: `${def.label} must be at most ${def.maxLength} characters.` }
+  if (key === 'userName' && /^echo$/i.test(value)) return { ok: false, reason: "ECHO is ECHO's own name. Your name goes here." }
+  if (key !== 'userName' && RENAMES_ECHO.test(value)) return { ok: false, reason: "ECHO's name is always ECHO, so that was not saved." }
   if (looksSensitive(value)) return { ok: false, reason: 'That looks like sensitive information, so it was not saved.' }
   return { ok: true, value }
 }
@@ -123,6 +136,7 @@ export interface PreferenceRow {
   hint: string
   options?: readonly string[]
   maxLength: number
+  permanent?: boolean
   entry: PreferenceEntry | null
 }
 

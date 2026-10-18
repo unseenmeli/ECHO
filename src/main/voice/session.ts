@@ -45,7 +45,7 @@ import { CODE_EXECUTION_GUIDE, WEB_FETCH_GUIDE, WEB_SEARCH_DEEP_LESSON, WEB_SEAR
 import type { PreferenceStorePort } from '../memory/preferenceStore'
 import { STUDY_MATERIAL_GUIDE, type StudyMaterialPort } from '../study/studyMaterial'
 import type { Picture, PictureLookup } from '../lesson/pictures'
-import { PREFERENCE_TOOL_GUIDE, PREFERENCE_TOOLS, PreferenceTools } from '../memory/preferenceTools'
+import { introductionIn, PREFERENCE_TOOL_GUIDE, PREFERENCE_TOOLS, PreferenceTools } from '../memory/preferenceTools'
 import { composeGuide, composeTools, ComposeTools, type ComposePort } from '../compose/composeTools'
 import type { DraftEdits } from '../../shared/compose'
 import { DECK_GUIDE, DECK_TOOL_NAMES, DECK_TOOLS, isSlideMove, type DeckStudio } from '../deck/deckTools'
@@ -633,6 +633,8 @@ export class VoiceSession {
       this.scheduleAnnouncement()
       return
     }
+    // "My name is Sam" / "call me Sam": saved for good straight away, before the reply, so ECHO already knows it.
+    this.rememberIntroduction(text)
     // If ECHO just asked whether to remember something, a short yes/no settles it without another model call.
     const answer = this.prefTools?.resolveProposal(text) ?? this.compose?.resolveSpoken(text)
     if (answer?.kind === 'sent' || answer?.kind === 'cancelled') this.log(`[voice] draft ${answer.kind} (spoken)`)
@@ -802,6 +804,13 @@ export class VoiceSession {
     const outcome = this.prefTools?.handle(call, reply.question)
     if (outcome) this.log(`[voice] ${outcome.tool}: ${outcome.note}`)
     return outcome?.note
+  }
+
+  private rememberIntroduction(text: string): void {
+    const name = this.deps.preferences ? introductionIn(text) : null
+    if (!name) return
+    const r = this.deps.preferences!.set('userName', name, 'explicit')
+    if (r.ok && r.changed) this.log('[voice] learner introduced themselves; name saved')
   }
 
   /** Ends a reply without a word: nothing more is said, only an app note reaches history, and it leaves the transcript. */

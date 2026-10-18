@@ -99,6 +99,7 @@ export class PreferenceStore implements PreferenceStorePort {
         hint: d.hint,
         options: d.options,
         maxLength: d.maxLength,
+        ...(d.permanent ? { permanent: true } : {}),
         entry: this.map[d.key] ? { ...this.map[d.key]! } : null
       }))
     }
@@ -143,11 +144,13 @@ export class PreferenceStore implements PreferenceStorePort {
     return true
   }
 
+  /** Forgets every preference except the permanent ones (the learner's name), which only `forget` removes. */
   forgetAll(options: SetOptions = {}): number {
-    const count = Object.keys(this.map).length
+    const kept = PREFERENCE_DEFS.filter((d) => d.permanent && this.map[d.key]).map((d) => d.key)
+    const count = Object.keys(this.map).length - kept.length
     if (!count) return 0
     const before = { ...this.map }
-    this.map = {}
+    this.map = Object.fromEntries(kept.map((k) => [k, this.map[k]!])) as PreferenceMap
     this.commit(before, 'Preferences forgotten', options)
     return count
   }

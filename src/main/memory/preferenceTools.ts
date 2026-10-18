@@ -11,7 +11,7 @@ export const PREFERENCE_TOOLS: ChatTool[] = [
   {
     name: 'remember_preference',
     description:
-      'Save a lasting preference the learner explicitly asked you to keep ("remember that I prefer diagrams", "from now on be less formal", "call me Sam"). Replaces any earlier value for the key. Never use it for one-off requests such as "explain this briefly", and never for something you only inferred.',
+      'Save a lasting preference the learner explicitly asked you to keep ("remember that I prefer diagrams", "from now on be less formal"), or the learner\'s name as soon as they introduce themselves ("I\'m Sam", "my name is Sam", "call me Sam"), without asking first. Replaces any earlier value for the key. Never use it for one-off requests such as "explain this briefly", and never for something you only inferred.',
     input_schema: { type: 'object', properties: { key: keyProp, value: valueProp }, required: ['key', 'value'] }
   },
   {
@@ -38,7 +38,9 @@ You can save lasting preferences about how to teach this learner. Saving is deli
 - Call remember_preference only when the learner explicitly asks you to remember something or sets a standing rule: "remember that I prefer diagrams", "from now on, be less formal", "always keep it short", "call me Sam". Call it before you say anything about saving: the tool result says whether it was saved. Then confirm aloud in one short sentence, or, if it was not saved, ask whether to remember it.
 - A request about the current answer is temporary. "Explain this briefly", "just this once", "for now", "quickly" are followed for this answer and never saved.
 - If you notice a pattern the learner never asked you to keep (for example, they keep asking for shorter answers), you may ask once, briefly, whether you should remember it, and call propose_preference. Never use remember_preference for something you inferred, and don't ask again about a pattern they declined.
-- Call forget_preference only when the learner asks you to forget, remove or reset something.
+- Names are kept for good. When the learner introduces themselves ("I'm Sam", "my name is Sam", "call me Sam"), call remember_preference with userName right away, without asking, then greet them by name. Never save a name you only guessed, and never save ECHO as their name.
+- Your own name is always ECHO and is not a preference: never save a name for yourself.
+- Call forget_preference only when the learner asks you to forget, remove or reset something. Forgetting "everything" keeps the learner's name; it goes only when they ask you to forget their name.
 - Only the listed keys exist. Never save transcripts, what was on screen, secrets, or facts that are not about how to teach this learner.
 - The learner's current request always beats a saved preference.`
 
@@ -84,6 +86,34 @@ export function asksToForget(utterance: string): boolean {
   return FORGET_CUE.test(utterance)
 }
 
+// --- Introductions ---------------------------------------------------------------------------------
+// Introducing yourself is asking to be remembered: the name is saved at once, and for good.
+
+const INTRO_CUE = /\b(?:my name(?:'s| is)|name's|call me|i'm|i am|this is|it's)\b/i
+/** Words that follow "my name is" / "call me" without being a name ("call me back", "my name is on it"). */
+const NOT_A_NAME = new Set(
+  'a an the not just back later on in at out up down when if by for to and but or so please now here there again sometime tomorrow echo'.split(' ')
+)
+
+/** True when the learner's words introduce them by this name (the model's userName save is then honored). */
+export function introduces(utterance: string, name: string): boolean {
+  const first = name.trim().split(/\s+/)[0]?.toLowerCase()
+  if (!first || !INTRO_CUE.test(utterance)) return false
+  const words: string[] = utterance.toLowerCase().match(/[\p{L}'-]+/gu) ?? []
+  return words.includes(first)
+}
+
+/**
+ * The name in a plain introduction ("my name is Sam", "call me Sam", "my name's Sam Lee"), or null. Only these
+ * unmistakable forms: "I'm …" is left to the model, since "I'm tired" is not a name.
+ */
+export function introductionIn(utterance: string): string | null {
+  const m = /\b(?:my name(?:'s| is)|(?:you can |please )?call me)\s+([\p{L}][\p{L}'-]*)(?:\s+([\p{Lu}][\p{L}'-]*))?/iu.exec(utterance)
+  if (!m || NOT_A_NAME.has(m[1].toLowerCase())) return null
+  const last = m[2] && !NOT_A_NAME.has(m[2].toLowerCase()) ? ` ${m[2]}` : ''
+  return `${m[1][0].toUpperCase()}${m[1].slice(1)}${last}`
+}
+
 const YES = /^(?:(?:yes|yeah|yep|yup|sure|ok|okay|please|absolutely|definitely|go ahead|do it|sounds good|that works|that'?d be (?:great|good|nice)|why not)\b[\s,.!]*)+(?:please|do that|save it|remember (?:that|it))?[\s,.!]*$/i
 const NO = /^(?:(?:no|nope|nah|not really|don'?t|do not|never mind|nevermind|no thanks|no thank you|skip it|not now)\b[\s,.!]*)+(?:thanks|thank you|please)?[\s,.!]*$/i
 
@@ -120,7 +150,8 @@ export class PreferenceTools {
     switch (call.name) {
       case 'remember_preference': {
         if (!isPreferenceKey(input.key)) return { tool: call.name, note: 'unknown key', changed: false }
-        if (!asksToRemember(utterance)) {
+        const introduced = input.key === 'userName' && typeof input.value === 'string' && introduces(utterance, input.value)
+        if (!introduced && !asksToRemember(utterance)) {
           // The model saved something the learner did not ask to keep. Do not write it, but let a yes keep it,
           // unless they said it was only for now.
           if (TEMPORARY_CUE.test(utterance)) {
