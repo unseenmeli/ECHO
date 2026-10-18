@@ -48,6 +48,10 @@ import type { Picture, PictureLookup } from '../lesson/pictures'
 import { PREFERENCE_TOOL_GUIDE, PREFERENCE_TOOLS, PreferenceTools } from '../memory/preferenceTools'
 import { composeGuide, composeTools, ComposeTools, type ComposePort } from '../compose/composeTools'
 import type { DraftEdits } from '../../shared/compose'
+<<<<<<< HEAD
+=======
+import { DECK_GUIDE, DECK_TOOL_NAMES, DECK_TOOLS, type DeckStudio } from '../deck/deckTools'
+>>>>>>> origin/main
 import {
   IDLE_SNAPSHOT,
   type EngineError,
@@ -121,6 +125,11 @@ export interface SessionDeps {
   study?: StudyMaterialPort
   /** Emails and posts ECHO drafts for the user to approve; the app opens the compose page on their yes. */
   compose?: ComposePort
+<<<<<<< HEAD
+=======
+  /** Slide decks ECHO builds by voice (kept by the app across conversations). */
+  deck?: DeckStudio
+>>>>>>> origin/main
   log?(message: string): void
 }
 
@@ -232,6 +241,8 @@ export class VoiceSession {
   private practiceTurnsLeft = 0
   /** The background request folding older turns into the conversation summary, if one is running. */
   private summarizing: AbortController | null = null
+  /** A line ECHO says on its own (a deck is ready) once it isn't talking and the user isn't either. */
+  private announcement: string | null = null
 
   private duckTimer: ReturnType<typeof setTimeout> | null = null
   private releaseTimer: ReturnType<typeof setTimeout> | null = null
@@ -243,6 +254,10 @@ export class VoiceSession {
   constructor(private readonly deps: SessionDeps) {
     this.prefTools = deps.preferences ? new PreferenceTools(deps.preferences) : null
     this.compose = deps.compose?.destinations.length ? new ComposeTools(deps.compose) : null
+<<<<<<< HEAD
+=======
+    deps.deck?.setAnnouncer((line) => this.announce(line))
+>>>>>>> origin/main
   }
 
   private now(): number {
@@ -399,6 +414,31 @@ export class VoiceSession {
     this.compose?.edit(id, edits)
   }
 
+<<<<<<< HEAD
+=======
+  /** Something to say without being asked (a deck finished). Waits for the current reply, or the user, to finish. */
+  private announce(line: string): void {
+    if (!this.active) return
+    this.announcement = line
+    this.maybeAnnounce()
+  }
+
+  private maybeAnnounce(): void {
+    const line = this.announcement
+    if (!line || !this.active || this.reply || (this.turn && !this.turn.suspect)) return
+    this.announcement = null
+    this.flushPendingStop()
+    this.startReply('', { localText: line })
+  }
+
+  /** After the current event settles: a reply ending is often followed at once by the next one starting. */
+  private scheduleAnnouncement(): void {
+    if (!this.announcement) return
+    const epoch = this.epoch
+    setTimeout(() => epoch === this.epoch && this.maybeAnnounce(), 0)
+  }
+
+>>>>>>> origin/main
   // --- Events from the audio engine -----------------------------------------------
 
   onEngineReady(): void {
@@ -583,6 +623,7 @@ export class VoiceSession {
     if (!text || isNoise(text)) {
       if (turn?.entryId) this.removeEntry(turn.entryId)
       this.refresh()
+      this.scheduleAnnouncement()
       return
     }
 
@@ -599,9 +640,16 @@ export class VoiceSession {
     // If ECHO just asked whether to remember something, a short yes/no settles it without another model call.
     const answer = this.prefTools?.resolveProposal(text) ?? this.compose?.resolveSpoken(text)
     if (answer?.kind === 'sent' || answer?.kind === 'cancelled') this.log(`[voice] draft ${answer.kind} (spoken)`)
+<<<<<<< HEAD
+=======
+    // "Next slide", "go back", "slide three" while a deck is open: moved at once, no model call.
+    const slide = answer ? null : this.deps.deck?.resolveSpoken(text)
+    if (slide) this.log('[voice] deck navigation (spoken)')
+>>>>>>> origin/main
     const unsure = unsureWords(info.words, this.deps.config.sttUnsureConfidence)
     if (unsure.length) this.log(`[voice] speech recognition unsure of: ${unsure.join(', ')}`)
-    this.submit(text, answer ? { localText: answer.spoken } : { unsure })
+    const localText = answer?.spoken ?? slide
+    this.submit(text, localText ? { localText } : { unsure })
   }
 
   private confirmTurn(turn: Turn): void {
@@ -745,6 +793,19 @@ export class VoiceSession {
 
   /** Preference and other tool calls the model made while answering. */
   private onToolUse(reply: Reply, call: ToolCall): string | undefined {
+<<<<<<< HEAD
+=======
+    if (DECK_TOOL_NAMES.has(call.name) && this.deps.deck) {
+      const note = this.deps.deck.handle(call, {
+        chat: this.deps.chat,
+        conversation: this.history.toMessages(this.deps.config.historyMessages),
+        webSearch: this.deps.config.webSearchEnabled,
+        material: call.name === 'build_presentation' ? this.deckMaterial(reply, call) : null
+      })
+      this.log(`[voice] ${call.name}: ${note.split(/[:;.]/)[0]}`)
+      return note
+    }
+>>>>>>> origin/main
     if (call.name === 'draft_message' && this.compose) {
       const note = this.compose.handle(call)
       this.log(`[voice] draft_message: ${note.split(':')[0].split('.')[0]}`)
@@ -847,12 +908,37 @@ export class VoiceSession {
 
   /** Always the same tools in the same order for a session, so the tool list stays in the cached prefix. */
   private toolsForRequest(): { tools?: ChatTool[] } {
+<<<<<<< HEAD
     const tools = [...(this.prefTools ? PREFERENCE_TOOLS : []), ...(this.compose ? composeTools(this.deps.compose!.destinations) : [])]
+=======
+    const tools = [
+      ...(this.prefTools ? PREFERENCE_TOOLS : []),
+      ...(this.compose ? composeTools(this.deps.compose!.destinations) : []),
+      ...(this.deps.deck ? DECK_TOOLS : [])
+    ]
+>>>>>>> origin/main
     return tools.length ? { tools } : {}
   }
 
   private composeGuide(): string | null {
     return this.compose ? composeGuide(this.deps.compose!.destinations) : null
+<<<<<<< HEAD
+=======
+  }
+
+  /** Study material for a deck, looked up by what the deck is about as well as what was said. */
+  private deckMaterial(reply: Reply, call: ToolCall): string | null {
+    const topic = String((call.input as Record<string, unknown> | null)?.topic ?? '')
+    try {
+      return this.deps.study?.hasMaterial() ? this.deps.study.contextFor(`${reply.question}\n${topic}`) : null
+    } catch {
+      return null
+    }
+  }
+
+  private deckGuide(): string | null {
+    return this.deps.deck ? DECK_GUIDE : null
+>>>>>>> origin/main
   }
 
   /**
@@ -948,13 +1034,21 @@ export class VoiceSession {
       const prefs = this.preferenceParts()
       const study = this.studyParts(reply)
       await this.deps.chat.stream({
+<<<<<<< HEAD
         system: buildSystemPrompt(prefs.guide, this.composeGuide(), LESSON_PROMPT_ADDENDUM, this.skillsFor(reply, true), research.guide, study.guide),
+=======
+        system: buildSystemPrompt(prefs.guide, this.composeGuide(), this.deckGuide(), LESSON_PROMPT_ADDENDUM, this.skillsFor(reply, true), research.guide, study.guide),
+>>>>>>> origin/main
         systemTail: prefs.tail,
         // The whiteboard reaches the tutor through <lesson_context>, the screen through <screen_context>.
         turnContext: buildTurnContext(
           context,
           reply.filler,
+<<<<<<< HEAD
           [lessonContext, study.context, this.compose?.turnNote(), this.pictureNote(reply, true), this.repairNotes(reply, !!context?.screenImage, true)].filter(Boolean).join('\n\n') || null
+=======
+          [lessonContext, study.context, this.compose?.turnNote(), this.deps.deck?.turnNote(), this.pictureNote(reply, true), this.repairNotes(reply, !!context?.screenImage, true)].filter(Boolean).join('\n\n') || null
+>>>>>>> origin/main
         ),
         maxTokens: Math.max(this.deps.config.claudeMaxTokens, reply.deep ? DEEP_MAX_TOKENS : LESSON_MAX_TOKENS),
         deep: reply.deep,
@@ -1118,12 +1212,20 @@ The learner asked to see a picture of "${p.subject}", but ${why}. Say so plainly
       const prefs = this.preferenceParts()
       const study = this.studyParts(reply)
       await this.deps.chat.stream({
+<<<<<<< HEAD
         system: buildSystemPrompt(prefs.guide, this.composeGuide(), this.skillsFor(reply, false), research.guide, study.guide),
+=======
+        system: buildSystemPrompt(prefs.guide, this.composeGuide(), this.deckGuide(), this.skillsFor(reply, false), research.guide, study.guide),
+>>>>>>> origin/main
         systemTail: prefs.tail,
         turnContext: buildTurnContext(
           context,
           reply.filler,
+<<<<<<< HEAD
           [study.context, this.compose?.turnNote(), this.pictureNote(reply, false), this.repairNotes(reply, !!context?.screenImage, false)].filter(Boolean).join('\n\n') || null
+=======
+          [study.context, this.compose?.turnNote(), this.deps.deck?.turnNote(), this.pictureNote(reply, false), this.repairNotes(reply, !!context?.screenImage, false)].filter(Boolean).join('\n\n') || null
+>>>>>>> origin/main
         ),
         ...(reply.deep ? { maxTokens: Math.max(this.deps.config.claudeMaxTokens, DEEP_VERBAL_MAX_TOKENS), deep: true } : { tier: reply.tier }),
         ...this.reasoningFor(reply, false),
@@ -1297,6 +1399,7 @@ The learner asked to see a picture of "${p.subject}", but ${why}. Say so plainly
     }
     this.refresh()
     this.onPreferencesChanged() // a voice change made during this reply applies from the next one
+    this.scheduleAnnouncement()
   }
 
   /**
@@ -1380,6 +1483,7 @@ The learner asked to see a picture of "${p.subject}", but ${why}. Say so plainly
     this.compose?.reset()
     this.summarizing?.abort()
     this.summarizing = null
+    this.announcement = null
     this.searching = false
     this.clearDuckTimer()
     if (this.releaseTimer) clearTimeout(this.releaseTimer)

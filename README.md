@@ -53,10 +53,17 @@ Built for the moments when you’re stuck on code, an error message, a diagram, 
 
 **Download. Unzip. Install. Meet Echo.**
 
+<<<<<<< HEAD
 | Platform | Download | Installation |
 |:---|:---|:---|
 | **Windows** | [Download for Windows](WINDOWS_ZIP_URL) | Extract the ZIP and run the `.exe` installer |
 | **macOS** | [Download for macOS](MACOS_ZIP_URL) | Extract the ZIP, open the `.dmg`, and drag Echo into Applications |
+=======
+| Platform | Installation |
+|:---|:---|:---|
+| **Windows** | [Download for Windows](https://github.com/unseenmeli/ECHO/releases/download/InstallersWIN/Echo.Setup.0.1.0.exe) | Run the `.exe` installer |
+| **macOS (Apple Silicon)** | [Download for macOS](https://github.com/unseenmeli/ECHO/releases/download/Installers/Echo-0.1.0-arm64.dmg) | Open the `.dmg` and drag Echo into Applications |
+>>>>>>> origin/main
 
 Open Echo and follow the permission prompts for the features you want to use.
 

@@ -11,6 +11,10 @@ import { PreferenceStore } from './memory/preferenceStore'
 import { STUDY_EXTENSIONS, StudyMaterial } from './study/studyMaterial'
 import { openPreferencesWindow, preferencesWindow } from './preferencesWindow'
 import { registerDraftIpc } from './compose/draftWindow'
+<<<<<<< HEAD
+=======
+import { registerDeckIpc } from './deck/deckWindow'
+>>>>>>> origin/main
 import { AccessCodeStore, registerAccessIpc } from './accessCode'
 import { loadEnvFiles } from './voice/config'
 
@@ -233,6 +237,11 @@ if (!app.requestSingleInstanceLock()) {
       answer: (id, send) => voiceHost.answerDraft(id, send),
       edit: (id, edits) => voiceHost.editDraft(id, edits)
     })
+<<<<<<< HEAD
+=======
+    // The window for slide decks ECHO builds by voice.
+    registerDeckIpc((index) => voiceHost.selectSlide(index))
+>>>>>>> origin/main
     registerScreenIpc(() => [companion, lesson].filter((w): w is BrowserWindow => !!w && !w.isDestroyed()))
     // What ECHO remembers about how to teach this learner: a small file in the user-data folder.
     const preferences = new PreferenceStore(join(app.getPath('userData'), 'preferences.json'))
