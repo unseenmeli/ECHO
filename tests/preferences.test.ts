@@ -195,7 +195,7 @@ describe('PreferenceStore', () => {
     expect(store.promptBlock()).toBe('')
     store.set('visualStyle', 'diagrams', 'explicit')
     store.set('userName', 'Sam', 'explicit')
-    expect(store.promptBlock()).toBe('- Visual style: diagrams\n- Your name: Sam')
+    expect(store.promptBlock()).toBe("- Visual style: diagrams\n- The learner's name (the person you are speaking with; your name is ECHO): Sam")
   })
 })
 
@@ -526,7 +526,7 @@ describe('preferences in a conversation', () => {
     const second = sessionSetup(relaunched)
     second.chat.scripts.push((r) => r.onText('Hi.'))
     await second.say('Hello')
-    expect(second.chat.calls[0].systemTail).toContain('- Your name: Sam')
+    expect(second.chat.calls[0].systemTail).toContain("- The learner's name (the person you are speaking with; your name is ECHO): Sam")
     rmSync(dir, { recursive: true, force: true })
   })
 

@@ -107,7 +107,11 @@ export class PreferenceStore implements PreferenceStorePort {
   promptBlock(): string {
     const lines = PREFERENCE_DEFS.flatMap((d) => {
       const e = this.map[d.key]
-      return e ? [`- ${d.label}: ${e.value}`] : []
+      if (!e) return []
+      // "Your name" is ambiguous in a prompt addressed to ECHO. Make the subject explicit so
+      // the model applies this to the learner rather than treating it as its own name.
+      const label = d.key === 'userName' ? "The learner's name (the person you are speaking with; your name is ECHO)" : d.label
+      return [`- ${label}: ${e.value}`]
     })
     return lines.length ? lines.join('\n') : ''
   }
