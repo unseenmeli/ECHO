@@ -65,7 +65,7 @@ export const PREFERENCE_DEFS: readonly PreferenceDef[] = [
   { key: 'proactivity', label: 'Proactivity', hint: 'Whether ECHO offers next steps and checks understanding on its own.', options: ['reactive', 'balanced', 'proactive'], maxLength: 12 },
   { key: 'voice', label: 'Voice', hint: "ECHO's speaking voice. Applies from the next reply.", options: VOICES, maxLength: 30 },
   { key: 'language', label: 'Language', hint: 'The language ECHO answers in.', maxLength: 30 },
-  { key: 'userName', label: 'Your name', hint: 'What ECHO calls you.', maxLength: 40 }
+  { key: 'userName', label: 'What ECHO should call you', hint: 'Your name, for ECHO to use when speaking to you.', maxLength: 40 }
 ]
 
 const DEF_BY_KEY = new Map<string, PreferenceDef>(PREFERENCE_DEFS.map((d) => [d.key, d]))
