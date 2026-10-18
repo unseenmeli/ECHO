@@ -782,7 +782,8 @@ export class VoiceSession {
       const note = this.deps.deck.handle(call, {
         chat: this.deps.chat,
         conversation: this.history.toMessages(this.deps.config.historyMessages),
-        webSearch: this.deps.config.webSearchEnabled
+        webSearch: this.deps.config.webSearchEnabled,
+        material: call.name === 'build_presentation' ? this.deckMaterial(reply, call) : null
       })
       this.log(`[voice] ${call.name}: ${note.split(/[:;.]/)[0]}`)
       return note
@@ -899,6 +900,16 @@ export class VoiceSession {
 
   private composeGuide(): string | null {
     return this.compose ? composeGuide(this.deps.compose!.destinations) : null
+  }
+
+  /** Study material for a deck, looked up by what the deck is about as well as what was said. */
+  private deckMaterial(reply: Reply, call: ToolCall): string | null {
+    const topic = String((call.input as Record<string, unknown> | null)?.topic ?? '')
+    try {
+      return this.deps.study?.hasMaterial() ? this.deps.study.contextFor(`${reply.question}\n${topic}`) : null
+    } catch {
+      return null
+    }
   }
 
   private deckGuide(): string | null {
