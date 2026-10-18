@@ -66,6 +66,21 @@ export interface DeckView {
   status: { kind: 'building' | 'revising' | 'ready' | 'failed'; message: string }
 }
 
+/** The image search that means ECHO's own character art (bundled with the app, not looked up). */
+export const ECHO_PICTURE_SEARCH = 'ECHO'
+
+/** True for an image search asking for ECHO itself ("ECHO", "the ECHO character", "ECHO's avatar"). */
+export function isEchoPictureSearch(search: string | undefined): boolean {
+  if (!search) return false
+  const s = search.trim().toLowerCase().replace(/^the\s+/, '').replace(/['’]s\b/, '')
+  return /^echo(?:\s+(?:itself|character|avatar|mascot|art|character art|logo|app|tutor|companion))?$/.test(s)
+}
+
+/** A deck whose topic is ECHO itself (always opens with ECHO's picture). */
+export function isAboutEcho(topic: string): boolean {
+  return /\becho\b/i.test(topic)
+}
+
 export const MAX_SLIDES = 20
 const MAX_TEXT = 300
 const MAX_NOTES = 1500

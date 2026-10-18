@@ -15,6 +15,7 @@ import { showDraft } from '../compose/draftWindow'
 import { DeckStudio } from '../deck/deckTools'
 import { closeDeck, isDeckOpen, printDeck, showDeck } from '../deck/deckWindow'
 import { saveDeck } from '../deck/saveDeck'
+import { withEchoPicture } from '../deck/echoPicture'
 import { composeUrl, type Draft, type DraftEdits } from '../../shared/compose'
 import type { PreferenceStore } from '../memory/preferenceStore'
 import type { StudyMaterialPort } from '../study/studyMaterial'
@@ -167,7 +168,7 @@ class VoiceHost {
   }
 
   private createDeckStudio(): DeckStudio {
-    const host = this
+    const pictures = withEchoPicture(() => this.pictures ?? undefined)
     return new DeckStudio(
       {
         show: showDeck,
@@ -179,9 +180,7 @@ class VoiceHost {
           if (failed) console.log(`[deck] saved, but could not open it: ${failed}`)
           return path
         },
-        get pictures() {
-          return host.pictures ?? undefined
-        }
+        pictures
       },
       (m) => console.log(m)
     )

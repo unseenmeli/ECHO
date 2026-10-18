@@ -1,4 +1,4 @@
-import { DeckLineParser, deckToLines, MAX_SLIDES, THEME_IDS, type Deck, type DeckView, type Slide } from '../../shared/deck'
+import { DeckLineParser, deckToLines, ECHO_PICTURE_SEARCH, isAboutEcho, isEchoPictureSearch, MAX_SLIDES, THEME_IDS, type Deck, type DeckView, type Slide } from '../../shared/deck'
 import type { PictureLookup } from '../lesson/pictures'
 import type { ChatMessage } from '../voice/history'
 import { ChatError, type ChatPort, type ChatTool, type ToolCall } from '../voice/ports'
@@ -26,6 +26,8 @@ export interface DeckContext {
   chat: ChatPort
   conversation: ChatMessage[]
   webSearch: boolean
+  /** The user's study material for this request (<study_material>), so a deck can be built from it directly. */
+  material?: string | null
 }
 
 export const DECK_TOOLS: ChatTool[] = [
@@ -107,9 +109,10 @@ Writing good slides:
 - One idea per slide. Slide titles say the point ("Mitochondria turn food into usable energy"), not just the topic ("Mitochondria").
 - Bullets are short phrases, at most about 10 words, no full stops, no sub-bullets. The detail goes in notes.
 - notes: what the presenter says on that slide, 2 to 4 natural spoken sentences.
+- A picture of ECHO itself (ECHO's character art) is available: use image {"search":"${ECHO_PICTURE_SEARCH}"}. A deck about ECHO puts it on the title slide.
 - image search: 2 to 5 plain words naming a real, photographable or diagrammed subject that Wikimedia Commons would have ("red blood cells microscope", "Eiffel Tower"). Use pictures on the title slide and on 2 to 4 other slides where seeing the thing helps; never for abstract ideas.
 - theme: midnight (bold, tech), paper (classic, humanities), ocean (science, calm), forest (nature, health, light), sunset (creative, energetic).
-- Don't invent facts, statistics, quotes or sources. When the brief gives material, build from it.
+- Don't invent facts, statistics, quotes or sources. When the brief or <study_material> covers the topic, build from it; when a deck is about ECHO itself, use only what <study_material> says about ECHO.
 - The title and every text field are plain text: no Markdown, no emoji.`
 
 const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty']
@@ -289,6 +292,7 @@ ${deck.slides.length ? `The user is on slide ${this.current + 1} of ${deck.slide
     const conversation = transcript(ctx.conversation)
     const request = [
       conversation ? `<conversation>\n${conversation}\n</conversation>` : null,
+      ctx.material ?? null,
       `<request>\nTopic: ${topic}\nSlides: ${count}\n${brief ? `Brief: ${brief}` : ''}\n</request>`,
       `Write the deck now: the header line, then exactly ${count} slide lines.`
     ]
@@ -300,6 +304,10 @@ ${deck.slides.length ? `The user is on slide ${this.current + 1} of ${deck.slide
       if (job.signal.aborted || !parser.header) return
       const known = this.deck?.id === id ? this.deck.slides.length : 0
       const slides = parser.slides
+      // A deck about ECHO always opens with ECHO's own picture.
+      if (known === 0 && slides[0] && isAboutEcho(topic) && !slides.some((s) => isEchoPictureSearch(s.image?.search))) {
+        if (slides[0].layout === 'title' || slides[0].layout === 'section' || slides[0].layout === 'image') slides[0].image = { search: ECHO_PICTURE_SEARCH }
+      }
       this.deck = { id, version: this.deck?.version ?? 0, ...parser.header, slides: [...slides] }
       this.status = { kind: 'building', message: `Writing slide ${Math.min(slides.length + 1, count)} of ${count}…` }
       for (let i = known; i < slides.length; i++) void this.findPicture(id, slides[i])
