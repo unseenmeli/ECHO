@@ -88,6 +88,8 @@ export interface VoiceConfig {
   codeExecutionEnabled: boolean
   /** Where ECHO may open drafted emails and posts (empty: drafting is off). */
   composeDestinations: DestinationId[]
+  /** Let ECHO build slide decks by voice, shown in their own window and saved to Documents. */
+  decksEnabled: boolean
 }
 
 const num = (v: string | undefined, fallback: number, min: number, max: number): number => {
@@ -207,6 +209,7 @@ export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): ConfigRes
       webFetchMaxTokens: num(env.ECHO_WEB_FETCH_MAX_TOKENS, 8000, 1000, 50000),
       codeExecutionEnabled: bool(env.ECHO_CODE_EXECUTION, true),
       composeDestinations: parseDestinations(env.ECHO_COMPOSE_DESTINATIONS),
+      decksEnabled: bool(env.ECHO_DECKS, true),
     }
   }
 }

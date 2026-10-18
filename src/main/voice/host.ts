@@ -12,6 +12,9 @@ import { screenVoiceContext } from './screenProvider'
 import type { EnginePort } from './ports'
 import { VoiceSession } from './session'
 import { showDraft } from '../compose/draftWindow'
+import { DeckStudio } from '../deck/deckTools'
+import { closeDeck, isDeckOpen, printDeck, showDeck } from '../deck/deckWindow'
+import { saveDeck } from '../deck/saveDeck'
 import { composeUrl, type Draft, type DraftEdits } from '../../shared/compose'
 import type { PreferenceStore } from '../memory/preferenceStore'
 import type { StudyMaterialPort } from '../study/studyMaterial'
@@ -47,6 +50,8 @@ class VoiceHost {
   private access: AccessCodeStore | null = null
   /** Kept across conversations, so a picture found once is not downloaded again. */
   private pictures: CommonsPictures | null = null
+  /** The deck ECHO is working on, kept across conversations so "save it" works after a restart. */
+  private readonly decks = this.createDeckStudio()
 
   // --- EnginePort ---------------------------------------------------------------------
   private readonly enginePort: EnginePort = {
@@ -156,6 +161,32 @@ class VoiceHost {
     this.session?.editDraft(id, edits)
   }
 
+  /** The deck window's own arrows and arrow keys. */
+  selectSlide(index: number): void {
+    this.decks.select(index)
+  }
+
+  private createDeckStudio(): DeckStudio {
+    const host = this
+    return new DeckStudio(
+      {
+        show: showDeck,
+        close: closeDeck,
+        isOpen: isDeckOpen,
+        save: async (deck, format) => {
+          const path = await saveDeck(deck, format, app.getPath('documents'), printDeck)
+          const failed = await shell.openPath(path)
+          if (failed) console.log(`[deck] saved, but could not open it: ${failed}`)
+          return path
+        },
+        get pictures() {
+          return host.pictures ?? undefined
+        }
+      },
+      (m) => console.log(m)
+    )
+  }
+
   /** Ends any conversation (used on app quit). */
   shutdown(): void {
     this.session?.stop()
@@ -262,6 +293,7 @@ class VoiceHost {
           void shell.openExternal(composeUrl(draft))
         }
       },
+      ...(cfg.decksEnabled ? { deck: this.decks } : {}),
       emit: (e) => this.broadcast(e),
       log: (m) => console.log(m)
     })
